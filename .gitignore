@@ -1,0 +1,45 @@
+# Agent runtime/session state (not project source)
+.omc/
+
+# Maven
+target/
+dependency-reduced-pom.xml
+
+# Logs
+*.log
+
+# Credentials -- nothing here today; this is the guard against the first accident
+.env
+.env.*
+*.pem
+*.key
+*.keystore
+*.jks
+*.p12
+*.pfx
+id_rsa*
+credentials*
+secrets*
+
+# Tests and test fixtures are kept outside this repository and are never tracked
+# here; see the Contributing section of the README.
+src/test/
+
+# OS
+.DS_Store
+._*
+.Spotlight-V100
+Thumbs.db
+desktop.ini
+
+# IDEs
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+.vscode/
+.classpath
+.project
+.settings/
+nbproject/

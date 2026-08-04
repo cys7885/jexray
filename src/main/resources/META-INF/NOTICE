@@ -1,0 +1,32 @@
+Jexray
+Copyright 2026 Jexray contributors
+
+This product includes software developed as part of the Jexray JADX plugin,
+licensed under the Apache License, Version 2.0. A copy of that license is
+distributed with this product as META-INF/LICENSE.txt.
+
+The distributed jar is a shaded (uber) jar and embeds relocated copies of the
+following third-party libraries:
+
+  RSyntaxTextArea (com.fifesoft:rsyntaxtextarea:3.6.1)
+    Copyright (c) 2021, Robert Futrell. All rights reserved.
+    Licensed under the BSD 3-Clause License.
+    Relocated to com.jexray.shaded.fife.
+    Full license text: META-INF/LICENSE (as shipped by the library).
+    https://github.com/bobbylight/RSyntaxTextArea
+
+  Gson (com.google.code.gson:gson:2.11.0)
+    Copyright Google Inc.
+    Licensed under the Apache License, Version 2.0.
+    Relocated to com.jexray.shaded.gson.
+    https://github.com/google/gson
+
+The following libraries are NOT bundled. They are supplied by the host
+application at runtime and are listed only to record the dependency:
+
+  JADX (io.github.skylot:jadx-core:1.5.5, provided scope), Apache License 2.0
+  SLF4J (org.slf4j), MIT License
+
+Ghidra is invoked as an external process and is neither bundled nor derived
+from; it is developed by the National Security Agency and distributed under the
+Apache License, Version 2.0.
