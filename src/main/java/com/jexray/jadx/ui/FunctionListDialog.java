@@ -66,6 +66,11 @@ public class FunctionListDialog extends JDialog {
 		panel.setFunctions(soId, names);
 	}
 
+	/** Mark which of {@code soId}'s listed names are linked in rather than defined there. */
+	public void setExternalNames(String soId, java.util.Set<String> names) {
+		panel.setExternalNames(soId, names);
+	}
+
 	public void surface() {
 		if (!isVisible()) {
 			setVisible(true);

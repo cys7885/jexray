@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -134,6 +135,13 @@ public class JexrayPlugin implements JadxPlugin {
 
 	private NativeViewDialog dialog;
 	private FunctionListDialog functionListDialog;
+
+	/**
+	 * Per library, which listed names are linked in from elsewhere. Filled when a library's
+	 * listing is fetched and handed to the browser so those entries render apart from the ones
+	 * that can actually be opened.
+	 */
+	private final Map<String, Set<String>> externalNamesBySoId = new ConcurrentHashMap<>();
 	private LoadedLibrariesDialog loadedLibrariesDialog;
 	private Timer syncTimer;
 	private EmbeddedGhidraBridge embeddedBridge;
@@ -987,14 +995,19 @@ public class JexrayPlugin implements JadxPlugin {
 				// empty query returns every function (substring match against "")
 				SearchResult res = client.search(soId, "");
 				List<String> names = new ArrayList<>();
+				Set<String> external = new HashSet<>();
 				if (res.functions != null) {
 					for (FunctionRef f : res.functions) {
 						if (f != null && f.name != null) {
 							names.add(f.name);
+							if (f.external) {
+								external.add(f.name);
+							}
 						}
 					}
 				}
 				Collections.sort(names);
+				externalNamesBySoId.put(soId, external);
 				showFunctionPicker(gui, soId, names);
 			} catch (BridgeException e) {
 				LOG.warn("All-functions listing failed [{}]", e.getKind(), e);
@@ -1424,6 +1437,8 @@ public class JexrayPlugin implements JadxPlugin {
 				functionListDialog.setLibraries(libraries);
 				functionListDialog.update(soId, names);
 			}
+			// after the names, so the browser already has the entries these apply to
+			functionListDialog.setExternalNames(soId, externalNamesBySoId.get(soId));
 			functionListDialog.surface();
 		};
 		if (gui != null) {

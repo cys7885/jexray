@@ -1538,8 +1538,12 @@ public class EmbeddedGhidraBridge {
                         sb.append(',');
                     }
                     first = false;
+                    // "external" lets the browser mark an entry the caller can list but not open,
+                    // instead of leaving the user to discover that by clicking it.
                     sb.append("{\"name\":").append(jsonString(fe.name))
-                      .append(",\"address\":").append(jsonString(fe.address)).append('}');
+                      .append(",\"address\":").append(jsonString(fe.address))
+                      .append(",\"external\":").append(externals.contains(fe.name))
+                      .append('}');
                 }
             }
             sb.append("]}");

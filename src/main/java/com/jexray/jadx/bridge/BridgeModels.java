@@ -96,6 +96,12 @@ public final class BridgeModels {
 	public static final class FunctionRef {
 		public String name;
 		public String address;
+		/**
+		 * The library lists this name but holds no body for it -- it is linked in from elsewhere.
+		 * Absent from caches written before the field existed, which parse as {@code false} and so
+		 * behave exactly as they did before.
+		 */
+		public boolean external;
 	}
 
 	/** Response for {@code GET /so/{soId}/registernatives}. */

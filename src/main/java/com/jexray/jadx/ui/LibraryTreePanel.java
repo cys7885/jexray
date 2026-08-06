@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
@@ -80,6 +81,14 @@ public class LibraryTreePanel extends JPanel {
 
 	private final Map<String, LibraryEntry> libraries = new LinkedHashMap<>();
 	private final Map<String, List<String>> functionsBySoId = new LinkedHashMap<>();
+
+	/**
+	 * Per library, the listed names that hold no body here -- imported from another library. They
+	 * are shown so a library's dependencies are visible, but rendered apart from the functions you
+	 * can actually open. Populated separately from {@link #setFunctions} so callers and tests that
+	 * do not care keep working unchanged; a library with no entry simply marks nothing.
+	 */
+	private final Map<String, Set<String>> externalsBySoId = new LinkedHashMap<>();
 
 	// per-library "does it match the current filter" state, so a COLLAPSED library (never expanded,
 	// so functionsBySoId has no entry for it) can still bold once its match is known -- reuses
@@ -203,6 +212,7 @@ public class LibraryTreePanel extends JPanel {
 				Object shown = value;
 				boolean bold = false;
 				boolean dim = false;
+				boolean external = false;
 				String query = filterField.getText();
 				if (value instanceof DefaultMutableTreeNode n) {
 					if (n.getUserObject() instanceof LibraryEntry lib) {
@@ -212,6 +222,12 @@ public class LibraryTreePanel extends JPanel {
 						String highlighted = highlightMatch(name, query);
 						if (highlighted != null) {
 							shown = highlighted;
+						}
+						// an imported name is listed but cannot be opened: set it apart in italic,
+						// muted, and marked, rather than letting the user find out by clicking
+						external = isExternalName(n, name);
+						if (external) {
+							shown = withExternalMarker(highlighted != null ? highlighted : name);
 						}
 					}
 					bold = isMatchingCategoryNode(n, query);
@@ -348,6 +364,30 @@ public class LibraryTreePanel extends JPanel {
 	}
 
 	/** Supply the function names for one library; shown when that library is expanded. */
+	/** Mark which of {@code soId}'s listed names are linked in rather than defined here. */
+	public void setExternalNames(String soId, Set<String> names) {
+		externalsBySoId.put(soId, names == null ? Set.of() : new java.util.HashSet<>(names));
+	}
+
+	/** Whether {@code name}, sitting under {@code node}'s library, is one of those. */
+	private boolean isExternalName(DefaultMutableTreeNode node, String name) {
+		for (javax.swing.tree.TreeNode p = node.getParent(); p != null; p = p.getParent()) {
+			if (p instanceof DefaultMutableTreeNode d && d.getUserObject() instanceof LibraryEntry lib) {
+				Set<String> ext = externalsBySoId.get(lib.soId());
+				return ext != null && ext.contains(name);
+			}
+		}
+		return false;
+	}
+
+	/** Append the "lives elsewhere" marker, preserving any highlight markup already applied. */
+	private static String withExternalMarker(String label) {
+		String body = label.startsWith("<html>")
+				? label.substring("<html>".length(), label.length() - "</html>".length())
+				: escapeHtml(label);
+		return "<html>" + body + "&nbsp;&nbsp;↗</html>";
+	}
+
 	public void setFunctions(String soId, List<String> names) {
 		functionsBySoId.put(soId, names == null ? List.of() : new ArrayList<>(names));
 		rebuild();
