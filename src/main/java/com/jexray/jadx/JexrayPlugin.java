@@ -1565,6 +1565,7 @@ public class JexrayPlugin implements JadxPlugin {
 			// after the names, so the browser already has the entries these apply to
 			functionListDialog.setExternalNames(soId, externalNamesBySoId.get(soId));
 			functionListDialog.setExportedNames(soId, exportedNamesBySoId.get(soId));
+			functionListDialog.setRegisteredNativeNames(soId, registeredNamesBySoId.get(soId));
 			functionListDialog.surface();
 		};
 		if (gui != null) {

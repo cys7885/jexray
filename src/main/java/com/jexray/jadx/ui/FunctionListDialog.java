@@ -76,6 +76,11 @@ public class FunctionListDialog extends JDialog {
 		panel.setExportedNames(soId, names);
 	}
 
+	/** Mark which of {@code soId}'s listed names are bound to a Java method by registration. */
+	public void setRegisteredNativeNames(String soId, java.util.Set<String> names) {
+		panel.setRegisteredNativeNames(soId, names);
+	}
+
 	public void surface() {
 		if (!isVisible()) {
 			setVisible(true);

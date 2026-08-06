@@ -98,6 +98,14 @@ public class LibraryTreePanel extends JPanel {
 	 */
 	private final Map<String, Set<String>> exportsBySoId = new LinkedHashMap<>();
 
+	/**
+	 * Per library, the functions bound to a Java method by {@code RegisterNatives} rather than by
+	 * name. They are entry points but carry no naming convention -- an obfuscated app registers
+	 * them precisely so they cannot be found by name -- so nothing about the name reveals what they
+	 * are, and only the registration table does.
+	 */
+	private final Map<String, Set<String>> registeredBySoId = new LinkedHashMap<>();
+
 	// per-library "does it match the current filter" state, so a COLLAPSED library (never expanded,
 	// so functionsBySoId has no entry for it) can still bold once its match is known -- reuses
 	// exactly the count machinery recomputeTotal() already runs for the bottom total, instead of a
@@ -375,6 +383,11 @@ public class LibraryTreePanel extends JPanel {
 		exportsBySoId.put(soId, names == null ? Set.of() : new java.util.HashSet<>(names));
 	}
 
+	/** Mark which of {@code soId}'s listed names are bound to a Java method by registration. */
+	public void setRegisteredNativeNames(String soId, Set<String> names) {
+		registeredBySoId.put(soId, names == null ? Set.of() : new java.util.HashSet<>(names));
+	}
+
 	public void setFunctions(String soId, List<String> names) {
 		functionsBySoId.put(soId, names == null ? List.of() : new ArrayList<>(names));
 		rebuild();
@@ -567,8 +580,14 @@ public class LibraryTreePanel extends JPanel {
 		//
 		// JNI methods are exported too, so they are claimed first and "Exports" means the rest of
 		// the published surface; otherwise the two groups would overlap.
+		//
+		// "JNI method" is membership, not spelling: a function registered through RegisterNatives is
+		// an entry point whatever it is called, and an app that hides its entry points chooses
+		// exactly that route. Grouping it by the registration table rather than by name is the whole
+		// point -- otherwise it sits anonymously among thousands of others.
 		Set<String> external = externalsBySoId.getOrDefault(lib.soId(), Set.of());
 		Set<String> exported = exportsBySoId.getOrDefault(lib.soId(), Set.of());
+		Set<String> registered = registeredBySoId.getOrDefault(lib.soId(), Set.of());
 		List<String> jni = new ArrayList<>();
 		List<String> internal = new ArrayList<>();
 		List<String> exports = new ArrayList<>();
@@ -576,7 +595,7 @@ public class LibraryTreePanel extends JPanel {
 		for (String n : names) {
 			if (external.contains(n)) {
 				imports.add(n);
-			} else if (isJniEntryPoint(n)) {
+			} else if (isJniEntryPoint(n) || registered.contains(n)) {
 				jni.add(n);
 			} else if (exported.contains(n)) {
 				exports.add(n);
