@@ -31,6 +31,62 @@ public final class NativeSymbols {
 	// ELF
 	private static final int SHT_SYMTAB = 2;
 	private static final int SHT_DYNSYM = 11;
+
+	// ELF symbol types (st_info & 0xf)
+	private static final int STT_NOTYPE = 0;
+	private static final int STT_FUNC = 2;
+	private static final int STT_GNU_IFUNC = 10;
+
+	/** Section holds executable instructions (SHF_EXECINSTR). */
+	private static final long SHF_EXECINSTR = 0x4;
+
+	/**
+	 * Whether a symbol names something worth opening. {@code STT_FUNC} and {@code STT_GNU_IFUNC}
+	 * qualify outright.
+	 *
+	 * <p>{@code STT_NOTYPE} is admitted only when it sits in an executable section. It has to be
+	 * admitted at all because hand-written assembly routinely omits the {@code .type} directive,
+	 * and dropping it would lose JNI entry points {@link #defines} has to find -- but untyped
+	 * symbols are also how toolchains label read-only data, and build tooling routinely stamps
+	 * such labels into {@code .rodata}. Without the section test those appear as functions that no
+	 * decompiler can then produce.
+	 */
+	private static boolean namesCode(int type, boolean inExecSection) {
+		if (type == STT_FUNC || type == STT_GNU_IFUNC) {
+			return true;
+		}
+		return type == STT_NOTYPE && inExecSection;
+	}
+
+	/**
+	 * Whether {@code shndx} refers to a real, executable section. Reserved indices (SHN_ABS,
+	 * SHN_COMMON, anything past the table) name no section and so hold no code.
+	 */
+	private static boolean isExecSection(ByteBuffer sh, int shentsize, int shnum, boolean is64,
+			int shndx) {
+		if (shndx <= 0 || shndx >= shnum) {
+			return false;
+		}
+		int base = shndx * shentsize;
+		long flags = is64 ? sh.getLong(base + 8) : sh.getInt(base + 8) & 0xFFFFFFFFL;
+		return (flags & SHF_EXECINSTR) != 0;
+	}
+
+	/**
+	 * ARM/AArch64 mapping symbols: {@code $d} (data), {@code $a}/{@code $t}/{@code $x} (code),
+	 * optionally suffixed ({@code $d.0}). They mark code/data boundaries for disassemblers and are
+	 * {@code STT_NOTYPE}, so the type check above lets them through -- they have to go by name.
+	 */
+	private static boolean isMappingSymbol(String name) {
+		if (name.length() < 2 || name.charAt(0) != '$') {
+			return false;
+		}
+		char kind = name.charAt(1);
+		if (kind != 'd' && kind != 'a' && kind != 't' && kind != 'x') {
+			return false;
+		}
+		return name.length() == 2 || name.charAt(2) == '.';
+	}
 	// Mach-O
 	private static final int MH_MAGIC = 0xFEEDFACE;
 	private static final int MH_MAGIC_64 = 0xFEEDFACF;
@@ -75,7 +131,7 @@ public final class NativeSymbols {
 			}
 			int b0 = magic[0] & 0xFF, b1 = magic[1] & 0xFF, b2 = magic[2] & 0xFF, b3 = magic[3] & 0xFF;
 			if (b0 == 0x7F && b1 == 0x45 && b2 == 0x4C && b3 == 0x46) {
-				parseElf(raf, out);
+				parseElf(raf, out, false);
 			} else {
 				int be = ((b0 & 0xFF) << 24) | ((b1 & 0xFF) << 16) | ((b2 & 0xFF) << 8) | (b3 & 0xFF);
 				if (be == FAT_MAGIC || be == FAT_CIGAM) {
@@ -90,9 +146,38 @@ public final class NativeSymbols {
 		return out;
 	}
 
+	/**
+	 * Symbols the library calls out to but does not define -- whatever it links against at
+	 * runtime. The inverse of {@link #exportedSymbols}, and deliberately a separate query: folding
+	 * imports into the exported set would make {@link #defines} claim a library defines a symbol
+	 * it merely calls, and native-method resolution would then bind to the wrong {@code .so}.
+	 *
+	 * <p>ELF only. Mach-O undefined symbols are not collected -- the panel that consumes this is
+	 * about Android libraries, and reporting an empty list is honest where reporting a partial one
+	 * would not be.
+	 */
+	public static Set<String> importedSymbols(java.io.File file) {
+		Set<String> out = new LinkedHashSet<>();
+		if (file == null || !file.isFile()) {
+			return out;
+		}
+		try (RandomAccessFile raf = new RandomAccessFile(file, "r")) {
+			byte[] magic = read(raf, 0, 4);
+			if (magic == null || magic[0] != 0x7F || magic[1] != 0x45 || magic[2] != 0x4C
+					|| magic[3] != 0x46) {
+				return out;
+			}
+			parseElf(raf, out, true);
+		} catch (Exception ignored) {
+			// never throw for malformed input
+		}
+		return out;
+	}
+
 	// ---- ELF ----
 
-	private static void parseElf(RandomAccessFile raf, Set<String> out) throws IOException {
+	private static void parseElf(RandomAccessFile raf, Set<String> out, boolean undefinedOnly)
+			throws IOException {
 		byte[] ident = read(raf, 0, 16);
 		if (ident == null) {
 			return;
@@ -139,13 +224,14 @@ public final class NativeSymbols {
 		for (int i = 0; i < shnum; i++) {
 			int type = sh.getInt(i * shentsize + 4);
 			if (type == SHT_DYNSYM || type == SHT_SYMTAB) {
-				readElfSymtab(raf, sh, i, shentsize, shnum, is64, order, out);
+				readElfSymtab(raf, sh, i, shentsize, shnum, is64, order, out, undefinedOnly);
 			}
 		}
 	}
 
 	private static void readElfSymtab(RandomAccessFile raf, ByteBuffer sh, int symIdx, int shentsize,
-			int shnum, boolean is64, ByteOrder order, Set<String> out) throws IOException {
+			int shnum, boolean is64, ByteOrder order, Set<String> out, boolean undefinedOnly)
+			throws IOException {
 		long symOff, symSize, entSize;
 		int strIdx;
 		if (is64) {
@@ -187,18 +273,28 @@ public final class NativeSymbols {
 			int off = (int) (i * entSize);
 			int nameOff;
 			int shndx;
+			int info;
 			if (is64) {
 				nameOff = st.getInt(off);              // st_name
+				info = st.get(off + 4) & 0xFF;         // st_info
 				shndx = st.getShort(off + 6) & 0xFFFF; // st_shndx
 			} else {
 				nameOff = st.getInt(off);               // st_name
+				info = st.get(off + 12) & 0xFF;         // st_info
 				shndx = st.getShort(off + 14) & 0xFFFF; // st_shndx
 			}
-			if (shndx == 0) {
-				continue; // SHN_UNDEF -> undefined import, not defined here
+			boolean undefined = shndx == 0; // SHN_UNDEF -> linked in from elsewhere
+			if (undefined != undefinedOnly) {
+				continue;
+			}
+			// An undefined symbol has no section to inspect, so the executable-section test that
+			// keeps data labels out of the defined set cannot apply -- an import is known by the
+			// fact that something here calls it.
+			if (!namesCode(info & 0xF, undefined || isExecSection(sh, shentsize, shnum, is64, shndx))) {
+				continue; // data, sections, file names -- not something you can open
 			}
 			String name = cString(strtab, nameOff);
-			if (name != null && !name.isEmpty()) {
+			if (name != null && !name.isEmpty() && !isMappingSymbol(name)) {
 				out.add(name);
 			}
 		}
