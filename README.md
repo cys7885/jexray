@@ -1,6 +1,7 @@
 # Jexray
 
-**Native (JNI) code, right inside JADX.**
+**Native (JNI) code, right inside JADX.**<br>
+Not a symbol list — real Ghidra pseudocode, one right-click from the Java method.
 
 Jexray is a [JADX](https://github.com/skylot/jadx) plugin that turns `native` Java methods into a live doorway into the `.so` that implements them. Right-click a native method, and Jexray finds the matching function in the APK's native library, decompiles it with Ghidra, and shows you real pseudocode — with clickable calls, caret-following, and full back/forward history — without ever leaving JADX.
 
