@@ -522,7 +522,12 @@ public class NativeViewDialog extends JDialog {
 	}
 
 	/**
-	 * Plain {@code X} over the code shows xrefs of the current function, the way IDA's X does.
+	 * Plain {@code X} over the code shows xrefs, the way IDA's X does.
+	 *
+	 * <p>Over the pseudocode it follows the caret: the callers of the call the caret sits on. Over
+	 * the disassembly it stays on the displayed function, because disassembly has no call syntax
+	 * for {@link CallExtractor} to resolve against and a caret rule there could only ever answer
+	 * "nothing".
 	 *
 	 * <p>Bound only on the code areas ({@code WHEN_FOCUSED}), never window-wide: the find bar is a
 	 * text field, and a window-wide X would swallow the letter 'x' the moment the user typed it into
@@ -530,7 +535,15 @@ public class NativeViewDialog extends JDialog {
 	 */
 	private void installXrefsShortcut() {
 		javax.swing.KeyStroke x = javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_X, 0);
-		javax.swing.Action xrefAction = new javax.swing.AbstractAction() {
+		javax.swing.Action caretXref = new javax.swing.AbstractAction() {
+			private static final long serialVersionUID = 1L;
+
+			@Override
+			public void actionPerformed(java.awt.event.ActionEvent e) {
+				requestXrefsAtCaret();
+			}
+		};
+		javax.swing.Action currentXref = new javax.swing.AbstractAction() {
 			private static final long serialVersionUID = 1L;
 
 			@Override
@@ -538,10 +551,28 @@ public class NativeViewDialog extends JDialog {
 				requestXrefs();
 			}
 		};
-		for (RSyntaxTextArea area : new RSyntaxTextArea[] { pseudoArea, disasmArea }) {
-			area.getInputMap(JComponent.WHEN_FOCUSED).put(x, XREF_ACTION_KEY);
-			area.getActionMap().put(XREF_ACTION_KEY, xrefAction);
+		pseudoArea.getInputMap(JComponent.WHEN_FOCUSED).put(x, XREF_ACTION_KEY);
+		pseudoArea.getActionMap().put(XREF_ACTION_KEY, caretXref);
+		disasmArea.getInputMap(JComponent.WHEN_FOCUSED).put(x, XREF_ACTION_KEY);
+		disasmArea.getActionMap().put(XREF_ACTION_KEY, currentXref);
+	}
+
+	/**
+	 * Callers of the call the caret sits on. Does nothing when the caret is not on one -- a
+	 * variable, a type, whitespace -- instead of falling back to the displayed function, so the key
+	 * never answers a question the user didn't ask. "Xrefs of what I'm looking at" stays available
+	 * on the toolbar X button and the right-click entry, both of which are untouched.
+	 */
+	private void requestXrefsAtCaret() {
+		NativeFunctionView cur = history.current();
+		if (cur == null || onShowXrefs == null) {
+			return;
 		}
+		String call = CallExtractor.callIdentifierAt(pseudoArea.getText(), pseudoArea.getCaretPosition());
+		if (call == null) {
+			return;
+		}
+		onShowXrefs.accept(cur.soId(), call);
 	}
 
 	/** Handle one Escape. */
