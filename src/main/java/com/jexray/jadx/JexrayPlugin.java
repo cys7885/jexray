@@ -973,8 +973,47 @@ public class JexrayPlugin implements JadxPlugin {
 	 * alongside {@link #viewCache} on {@link #forceReanalyze}), so this bridge round trip happens
 	 * at most once per library rather than once per unresolved open.
 	 */
+	/**
+	 * The registration entry for {@code symbol}, tolerating a single leading-underscore difference.
+	 *
+	 * <p>The forward direction already does this -- a request for a name finds the symbol whether
+	 * or not a toolchain prefixed it with '_'. Going the other way used to demand an exact match,
+	 * so opening the prefixed form of a registered function found nothing and left it without a
+	 * link back to Java, even though navigating from Java had just reached it.
+	 */
+	private static NativeMethod lookupRegistered(Map<String, NativeMethod> bySymbol, String symbol) {
+		if (bySymbol.isEmpty() || symbol == null || symbol.isEmpty()) {
+			return null;
+		}
+		NativeMethod hit = bySymbol.get(symbol);
+		if (hit != null) {
+			return hit;
+		}
+		hit = bySymbol.get("_" + symbol);
+		if (hit != null) {
+			return hit;
+		}
+		return symbol.startsWith("_") ? bySymbol.get(symbol.substring(1)) : null;
+	}
+
 	private Map<String, NativeMethod> registeredNativeRefs(GhidraBridgeClient client, String soId) {
-		return registeredNativeRefsBySoId.computeIfAbsent(soId, id -> {
+		// An empty result is not memoised. It usually means the decompile pass had not yet seen the
+		// Java class whose methods this matches against -- which is the normal state while browsing
+		// the native side first -- and caching that would keep the link to Java missing for the rest
+		// of the session even after the class is opened.
+		Map<String, NativeMethod> known = registeredNativeRefsBySoId.get(soId);
+		if (known != null && !known.isEmpty()) {
+			return known;
+		}
+		Map<String, NativeMethod> computed = computeRegisteredNativeRefs(client, soId);
+		if (!computed.isEmpty()) {
+			registeredNativeRefsBySoId.put(soId, computed);
+		}
+		return computed;
+	}
+
+	private Map<String, NativeMethod> computeRegisteredNativeRefs(GhidraBridgeClient client, String soId) {
+		return ((java.util.function.Function<String, Map<String, NativeMethod>>) (id -> {
 			if (!getSoManager().soIdsWithExport("JNI_OnLoad").contains(id)) {
 				return Map.of();
 			}
@@ -1006,7 +1045,7 @@ public class JexrayPlugin implements JadxPlugin {
 				Thread.currentThread().interrupt();
 				return Map.of();
 			}
-		});
+		})).apply(soId);
 	}
 
 	private synchronized NativeViewDialog getOrCreateDialog(JadxGuiContext gui) {
