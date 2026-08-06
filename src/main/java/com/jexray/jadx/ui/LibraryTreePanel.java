@@ -603,18 +603,13 @@ public class LibraryTreePanel extends JPanel {
 				internal.add(n);
 			}
 		}
-		if (!jni.isEmpty()) {
-			node.add(group("JNI methods", jni));
-		}
-		if (!internal.isEmpty()) {
-			node.add(group("Functions", internal));
-		}
-		if (!exports.isEmpty()) {
-			node.add(group("Exports", exports));
-		}
-		if (!imports.isEmpty()) {
-			node.add(group("Imports", imports));
-		}
+		// Every group is listed even when it holds nothing. "JNI methods (0)" is an answer -- this
+		// library exposes no entry point of that kind -- whereas a missing group is ambiguous: the
+		// reader cannot tell it apart from a group that failed to build or was filtered away.
+		node.add(group("JNI methods", jni));
+		node.add(group("Functions", internal));
+		node.add(group("Exports", exports));
+		node.add(group("Imports", imports));
 		model.nodeStructureChanged(node);
 	}
 
