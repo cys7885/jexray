@@ -1163,6 +1163,15 @@ public class NativeViewDialog extends JDialog {
 	}
 
 	/** Show a brief, non-intrusive status message that auto-clears (does not touch content). */
+	/**
+	 * Float a notification card over the top-right of the view. For answers that are not failures
+	 * -- the status bar reads as a warning, and a modal dialog would be far too loud for "this
+	 * symbol lives in another library".
+	 */
+	public void showToast(String glyph, String title, String body) {
+		onEdt(() -> Toast.show(this, glyph, title, body));
+	}
+
 	public void flashStatus(String message) {
 		onEdt(() -> {
 			if (warningIcon != null) {
