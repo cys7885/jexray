@@ -484,9 +484,11 @@ public class JexrayPlugin implements JadxPlugin {
 				// its Ghidra name -- e.g. following a call from a JNI_OnLoad registrar, or picking
 				// it straight from All Functions. Reverse-match it against the same table
 				// resolveViaRegisterNatives uses going the other way.
-				NativeMethod registered = registeredNativeRefs(client, soId).get(symbol);
+				NativeMethod registered = lookupRegistered(registeredNativeRefs(client, soId), symbol);
 				if (registered != null) {
 					javaRef = registered.ref();
+				} else {
+					javaRef = javaRefByName(symbol);
 				}
 			}
 			NativeFunctionView view = new NativeFunctionView(soId, symbol, dec.address, dec.pseudocode, disasm, javaRef);
@@ -686,10 +688,209 @@ public class JexrayPlugin implements JadxPlugin {
 	 * never triggers fresh analysis merely to guess -- by this point {@code resolveViaRegisterNatives}
 	 * has already loaded every {@code JNI_OnLoad} library, the likely home of a dynamic registration.
 	 */
+	/** Two names for the same function, allowing for a single leading underscore on either side. */
+	private static boolean sameNativeName(String a, String b) {
+		if (a == null || b == null) {
+			return false;
+		}
+		return a.equals(b) || ("_" + a).equals(b) || a.equals("_" + b);
+	}
+
+	/**
+	 * The Java {@code native} method a symbol implements, found by name.
+	 *
+	 * <p>Only reached when the registration table could not answer -- which includes every library
+	 * that binds its methods without a {@code JNI_OnLoad} of its own, where that table is never
+	 * consulted at all. Without this, opening such a function from the browser leaves it with no
+	 * way back to Java even though navigating from Java reaches it perfectly well.
+	 *
+	 * <p>Returns null when more than one Java method could claim the symbol: a guess that picks
+	 * arbitrarily between them would send the user somewhere false, which is worse than leaving
+	 * the button disabled.
+	 */
+	private ICodeNodeRef javaRefByName(String symbol) {
+		if (symbol == null || symbol.isEmpty()) {
+			return null;
+		}
+		NativeMethod unique = null;
+		for (NativeMethod nm : nativeMethodPass.getNativeMethods().values()) {
+			if (nm == null || !sameNativeName(nm.methodName(), symbol)) {
+				continue;
+			}
+			if (unique != null && !unique.methodName().equals(nm.methodName())) {
+				LOG.info("Name-match for {} is ambiguous across Java methods; not guessing", symbol);
+				return null;
+			}
+			unique = nm;
+		}
+		return unique == null ? null : unique.ref();
+	}
+
+	/**
+	 * What each resolution route was asked and what it answered, in one line fit for an error
+	 * message. Counts only -- the routes themselves are named, the symbols are not, so this can be
+	 * pasted into a report without carrying the name of whatever was being analysed.
+	 */
+	private String describeResolutionAttempts(SoManager mgr, String mangled, NativeMethod nativeCtx) {
+		StringBuilder sb = new StringBuilder("Tried: exported symbol (")
+				.append(mgr.soIdsWithExport(mangled).size()).append(" libraries)");
+		int registrars = mgr.soIdsWithExport("JNI_OnLoad").size();
+		sb.append("; RegisterNatives table (").append(registrars)
+				.append(registrars == 1 ? " library exports JNI_OnLoad)" : " libraries export JNI_OnLoad)");
+		if (nativeCtx != null && nativeCtx.methodName() != null) {
+			String want = nativeCtx.methodName();
+			sb.append("; name match (").append(mgr.soIdsWithExport(want).size())
+					.append(" for the method name, ").append(mgr.soIdsWithExport("_" + want).size())
+					.append(" with a leading underscore)");
+		} else {
+			sb.append("; name match (skipped: opened without a Java method)");
+		}
+		return sb.append('.').toString();
+	}
+
+	/**
+	 * Which of several same-named candidates actually implements {@code nm}.
+	 *
+	 * <p>The name alone cannot say -- more than one library can export it -- but the runtime does
+	 * not decide by name either: a class's {@code native} methods are served by the library that
+	 * class loads. That load site is already known from the bytecode scan, so narrow the candidates
+	 * to the libraries the declaring class asks for.
+	 *
+	 * <p>Null when that still leaves a choice (the class loads several candidates, or none of them),
+	 * so the caller can ask rather than pick arbitrarily.
+	 */
+	private String pickOwningLibrary(NativeMethod nm, List<String> candidates) {
+		String declaring = nm == null ? null : nm.classBinaryName();
+		if (declaring == null) {
+			return null;
+		}
+		Set<String> loadedNames = new HashSet<>();
+		for (LoadLibraryDetector.LoadLibraryCall call : getLoadLibraryCalls()) {
+			if (call == null || call.rawArg() == null || !declaring.equals(call.classBinaryName())) {
+				continue;
+			}
+			loadedNames.add("lib" + call.rawArg() + ".so"); // Android resolves loadLibrary(x) to libx.so
+		}
+		if (loadedNames.isEmpty()) {
+			return null;
+		}
+		Map<String, String> soNames = getSoManager().soIdToName();
+		List<String> narrowed = new ArrayList<>();
+		for (String soId : candidates) {
+			if (loadedNames.contains(soNames.get(soId))) {
+				narrowed.add(soId);
+			}
+		}
+		return narrowed.size() == 1 ? narrowed.get(0) : null;
+	}
+
+	/**
+	 * Offer the matching functions in a list and let the user open one.
+	 *
+	 * <p>Reached only when the app itself does not say which is right: several libraries carry a
+	 * function of this name and the declaring class loads them all.
+	 *
+	 * <p>A vertical list rather than a dropdown or a row of buttons: every candidate stays visible
+	 * and is read the same way, nothing is pre-selected as though it were recommended -- the very
+	 * thing this dialog exists to say it cannot judge -- and the list still reads sensibly if a
+	 * library count larger than a handful ever turns up. Double-clicking a row opens it.
+	 *
+	 * <p>Blocks the calling worker until answered; the open cannot proceed without it. Dismissing
+	 * opens nothing, which is not an error -- the user declined to guess, as the plugin did.
+	 */
+	private String askWhichCandidate(String methodName, String symbol, List<String> soIds) {
+		Map<String, String> soNames = getSoManager().soIdToName();
+		String[] labels = new String[soIds.size()];
+		for (int i = 0; i < soIds.size(); i++) {
+			String lib = soNames.get(soIds.get(i));
+			labels[i] = lib == null ? soIds.get(i) : lib;
+		}
+		final int[] chosen = { -1 };
+		Runnable ask = () -> {
+			JFrame parent = context.getGuiContext() == null ? null : context.getGuiContext().getMainFrame();
+
+			javax.swing.JList<String> list = new javax.swing.JList<>(labels);
+			list.setSelectionMode(javax.swing.ListSelectionModel.SINGLE_SELECTION);
+			list.setVisibleRowCount(Math.min(labels.length, 8));
+			javax.swing.JScrollPane scroller = new javax.swing.JScrollPane(list);
+
+			javax.swing.JPanel panel = new javax.swing.JPanel(new java.awt.BorderLayout(0, 8));
+			panel.add(new javax.swing.JLabel("<html><body style='width:360px'>"
+					+ "<b>" + soIds.size() + " libraries define <code>" + symbol + "</code>.</b>"
+					+ "<br><br>The class declaring <code>" + methodName + "</code> loads them all, so "
+					+ "nothing in the app identifies which one implements it — the match is by name "
+					+ "alone.<br><br>Open it from:</body></html>"), java.awt.BorderLayout.NORTH);
+			panel.add(scroller, java.awt.BorderLayout.CENTER);
+
+			javax.swing.JOptionPane pane = new javax.swing.JOptionPane(panel,
+					JOptionPane.QUESTION_MESSAGE, JOptionPane.OK_CANCEL_OPTION);
+			javax.swing.JDialog dialog = pane.createDialog(parent, "Jexray — more than one match");
+			list.addMouseListener(new java.awt.event.MouseAdapter() {
+				@Override
+				public void mouseClicked(java.awt.event.MouseEvent e) {
+					if (e.getClickCount() == 2 && list.getSelectedIndex() >= 0) {
+						pane.setValue(JOptionPane.OK_OPTION);
+						dialog.setVisible(false);
+					}
+				}
+			});
+			dialog.setVisible(true);
+			dialog.dispose();
+			Object v = pane.getValue();
+			boolean ok = v instanceof Integer && (Integer) v == JOptionPane.OK_OPTION;
+			chosen[0] = ok ? list.getSelectedIndex() : -1;
+		};
+		try {
+			if (javax.swing.SwingUtilities.isEventDispatchThread()) {
+				ask.run();
+			} else {
+				javax.swing.SwingUtilities.invokeAndWait(ask);
+			}
+		} catch (Exception e) {
+			LOG.warn("Could not offer the matching functions for {}", methodName, e);
+			return null;
+		}
+		int idx = chosen[0];
+		boolean valid = idx >= 0 && idx < soIds.size();
+		LOG.info("Name-match for {}: {} candidates, opened {}", methodName, soIds.size(),
+				valid ? soIds.get(idx) : "none (dismissed)");
+		return valid ? soIds.get(idx) : null;
+	}
+
 	private RegMatch resolveByNameHeuristic(GhidraBridgeClient client, NativeMethod nm) {
 		String want = nm.methodName();
 		if (want == null || want.isEmpty()) {
 			return null;
+		}
+		// The symbol table answers without Ghidra, so a library that has not been analysed yet can
+		// still be identified -- the scan below only sees analysed ones, and a method opened before
+		// its library's turn would otherwise come back unresolved.
+		LOG.info("Name-match heuristic: Java method {} -> trying exports {} and _{}", want, want, want);
+		for (String candidate : new String[] { want, "_" + want }) {
+			List<String> owners = getSoManager().soIdsWithExport(candidate);
+			LOG.info("Name-match heuristic: {} exported by {} librar{}", candidate, owners.size(),
+					owners.size() == 1 ? "y" : "ies");
+			if (owners.size() == 1) {
+				LOG.info("Name-match heuristic resolved {} -> {} in {}", want, candidate, owners.get(0));
+				return new RegMatch(owners.get(0), candidate);
+			}
+			if (owners.size() > 1) {
+				// Found, more than once -- so reporting it missing would be the opposite of what
+				// happened. The runtime settles this by which library the declaring class loads,
+				// so narrow by that first, and only ask when even that leaves a choice.
+				String picked = pickOwningLibrary(nm, owners);
+				if (picked == null) {
+					// Even the load sites do not separate them -- a class that loads both leaves the
+					// name as the only link, and the name is what is ambiguous. The user knows which
+					// they meant; nothing in the binaries does.
+					picked = askWhichCandidate(want, candidate, owners);
+				}
+				if (picked != null) {
+					return new RegMatch(picked, candidate);
+				}
+				LOG.info("Name-match ambiguous for {}: {} libraries, left unresolved", want, owners.size());
+				return null;
+			}
 		}
 		RegMatch unique = null;
 		for (String soId : readySoIds) {
@@ -699,8 +900,11 @@ public class JexrayPlugin implements JadxPlugin {
 					continue;
 				}
 				for (FunctionRef fr : sr.functions) {
-					// search is substring + case-insensitive; require an exact name match here.
-					if (fr == null || fr.name == null || !want.equals(fr.name)) {
+					// search is substring + case-insensitive; require a whole-name match here,
+					// allowing the leading underscore some toolchains add -- the same tolerance the
+					// symbol lookup already applies, without which a library that prefixes its
+					// names matches nothing at all.
+					if (fr == null || fr.name == null || !sameNativeName(want, fr.name)) {
 						continue;
 					}
 					if (unique != null && !(unique.soId().equals(soId) && unique.symbol().equals(fr.name))) {
