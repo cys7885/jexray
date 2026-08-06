@@ -165,6 +165,9 @@ public class GhidraBridgeClient {
 			if (code == 404) {
 				throw new BridgeException(BridgeException.Kind.NOT_FOUND, "HTTP 404 for " + url);
 			}
+			if (code == 410) {
+				throw new BridgeException(BridgeException.Kind.EXTERNAL_SYMBOL, "HTTP 410 for " + url);
+			}
 			if (code == 409) {
 				throw new BridgeException(BridgeException.Kind.STILL_LOADING, "HTTP 409 for " + url);
 			}

@@ -9,6 +9,11 @@ public class BridgeException extends Exception {
 	public enum Kind {
 		/** Bridge responded 404: the requested function/symbol was not found. */
 		NOT_FOUND,
+		/**
+		 * Bridge responded 410: the name resolves only to a PLT stub, i.e. it is imported from
+		 * another library (libc, liblog, ...) and has no body in this {@code .so} to show.
+		 */
+		EXTERNAL_SYMBOL,
 		/** Could not reach the bridge (connection refused, timeout, unknown host, ...). */
 		CONNECTION_FAILED,
 		/** Bridge responded 409: the library is still being analyzed/cached. */

@@ -464,6 +464,15 @@ public class JexrayPlugin implements JadxPlugin {
 			}
 			maybeWarnGhidraVersion(d);
 		} catch (BridgeException e) {
+			if (e.getKind() == BridgeException.Kind.EXTERNAL_SYMBOL) {
+				// Not a failure: the user clicked an import (libc, liblog, ...). Say where the code
+				// actually lives instead of reporting a lookup that "failed".
+				LOG.debug("External symbol requested: {}", symbol);
+				d.showToast("↗", "External function",
+						symbol + " is imported from another library, so this APK carries only a "
+								+ "stub for it — there is no code here to decompile.");
+				return;
+			}
 			LOG.warn("Native view fetch failed for {} [{}]", symbol, e.getKind(), e);
 			if (silentNotFound && e.getKind() == BridgeException.Kind.NOT_FOUND) {
 				d.flashStatus("Not a resolvable function: " + symbol);
@@ -1199,6 +1208,15 @@ public class JexrayPlugin implements JadxPlugin {
 				}
 				d.showXrefs(new XrefsView(soId, symbol, res.xrefsKnown, callers));
 			} catch (BridgeException e) {
+				if (e.getKind() == BridgeException.Kind.EXTERNAL_SYMBOL) {
+					// Same answer the decompile path gives: an import has no body here, so it has
+					// no callers here either. Not a lookup failure.
+					LOG.debug("Xrefs requested for external symbol: {}", symbol);
+					d.showToast("↗", "External function",
+							symbol + " is imported from another library, so this APK carries only a "
+									+ "stub for it — there are no callers to list here.");
+					return;
+				}
 				LOG.warn("Xrefs lookup failed [{}] for {} in {}", e.getKind(), symbol, soId, e);
 				d.flashStatus("Xrefs lookup failed: "
 						+ BridgeMessages.forFailure(e.getKind(), symbol, client.getBaseUrl(), e.getMessage()));

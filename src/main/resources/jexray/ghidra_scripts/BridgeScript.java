@@ -137,10 +137,24 @@ public class BridgeScript extends GhidraScript {
         return null;
     }
 
+    /**
+     * Response for a name {@link #findFunction} could not resolve. If the only thing carrying that
+     * name is a forwarding stub, the symbol is imported from another library (libc, liblog, ...)
+     * rather than missing, and the UI should say so -- 410, not 404.
+     */
+    private Object[] unresolved(String name) {
+        for (Function f : currentProgram.getFunctionManager().getFunctions(true)) {
+            if (isForwardingStub(f) && f.getName().equals(name)) {
+                return new Object[]{410, errorJson("external symbol: " + name)};
+            }
+        }
+        return new Object[]{404, errorJson("function not found: " + name)};
+    }
+
     private Object[] decompile(String name) {
         Function func = findFunction(name);
         if (func == null) {
-            return new Object[]{404, errorJson("function not found: " + name)};
+            return unresolved(name);
         }
         DecompInterface decomp = new DecompInterface();
         try {
@@ -167,7 +181,7 @@ public class BridgeScript extends GhidraScript {
     private Object[] disassemble(String name) {
         Function func = findFunction(name);
         if (func == null) {
-            return new Object[]{404, errorJson("function not found: " + name)};
+            return unresolved(name);
         }
         String text = disassembleBody(func);
         StringBuilder sb = new StringBuilder();
@@ -253,7 +267,55 @@ public class BridgeScript extends GhidraScript {
         } finally {
             decomp.dispose();
         }
+        // Names that exist here ONLY as a forwarding stub: imports from libc, liblog and friends.
+        //
+        // An exported local function also has a PLT stub, so a name is only external when nothing
+        // emitted above carries it -- otherwise a function defined right here would be reported as
+        // an import of itself. Keyed by name so an import contributes one entry, not the two it
+        // actually has (a PLT stub plus a GOT-level thunk).
+        Set<String> listed = new HashSet<>();
+        for (Function f : fm.getFunctions(true)) {
+            if (!isForwardingStub(f)) {
+                listed.add(f.getName());
+            }
+        }
+        Map<String, Function> externalByName = new LinkedHashMap<>();
+        for (Function f : fm.getFunctions(true)) {
+            if (isForwardingStub(f) && !listed.contains(f.getName())) {
+                externalByName.putIfAbsent(f.getName(), f);
+            }
+        }
+
+        // Imports are listed so the browser answers "what does this library depend on", but they
+        // carry no body -- the server serves them straight from "externals" and never reads these
+        // empty fields. Emitted into the same array so the client needs no second code path.
+        for (Map.Entry<String, Function> e : externalByName.entrySet()) {
+            if (!first) {
+                json.append(',');
+            }
+            first = false;
+            json.append('{')
+                .append("\"name\":").append(jsonString(e.getKey())).append(',')
+                .append("\"address\":").append(jsonString(addr(e.getValue().getEntryPoint()))).append(',')
+                .append("\"pseudocode\":").append(jsonString("")).append(',')
+                .append("\"disassembly\":").append(jsonString("")).append(',')
+                .append("\"callers\":[]")
+                .append('}');
+        }
+
+        StringBuilder externals = new StringBuilder("[");
+        boolean firstExt = true;
+        for (String n : externalByName.keySet()) {
+            if (!firstExt) {
+                externals.append(',');
+            }
+            firstExt = false;
+            externals.append(jsonString(n));
+        }
+        externals.append(']');
+
         json.append("],\"registerNatives\":").append(regNativesJson)
+            .append(",\"externals\":").append(externals)
             .append(",\"formatVersion\":").append(CACHE_FORMAT_VERSION)
             .append('}');
 

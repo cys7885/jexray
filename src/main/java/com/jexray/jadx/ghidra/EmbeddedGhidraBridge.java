@@ -21,9 +21,11 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -1318,7 +1320,16 @@ public class EmbeddedGhidraBridge {
         }
         String regNatives = root.has("registerNatives") && root.get("registerNatives").isJsonArray()
             ? root.getAsJsonArray("registerNatives").toString() : "[]";
-        return new CacheData(list, byName, regNatives, xrefsKnown);
+        // Not gated on formatVersion: a version bump would not regenerate an existing cache, it
+        // would only strip its xrefs (see CURRENT_CACHE_FORMAT_VERSION). An older cache simply has
+        // no "externals" key and keeps answering "not found", exactly as it did before.
+        Set<String> externals = new HashSet<>();
+        if (root.has("externals") && root.get("externals").isJsonArray()) {
+            for (JsonElement el : root.getAsJsonArray("externals")) {
+                externals.add(el.getAsString());
+            }
+        }
+        return new CacheData(list, byName, regNatives, xrefsKnown, externals);
     }
 
     /** {@code key} is a content hash for every load reaching this point (see {@link #doLoad}). */
@@ -1395,13 +1406,21 @@ public class EmbeddedGhidraBridge {
         // null and must be reported as "unknown", never rendered as an empty (i.e. "verified
         // none") list.
         final boolean xrefsKnown;
+        /**
+         * Names present in the library only as a forwarding stub -- imported from libc, liblog and
+         * friends. They are intentionally absent from {@link #functions}, so without this set a
+         * click on one would be indistinguishable from a typo. Empty for caches written before the
+         * key existed, which simply fall back to the old "not found" answer.
+         */
+        final Set<String> externals;
 
         CacheData(List<FuncEntry> functions, Map<String, FuncEntry> byName, String registerNativesJson,
-                boolean xrefsKnown) {
+                boolean xrefsKnown, Set<String> externals) {
             this.functions = functions;
             this.byName = byName;
             this.registerNativesJson = registerNativesJson;
             this.xrefsKnown = xrefsKnown;
+            this.externals = externals;
         }
 
         Result registerNatives() {
@@ -1423,19 +1442,44 @@ public class EmbeddedGhidraBridge {
             return fe;
         }
 
+        /**
+         * 410 for an import, else null. Checked before {@link #find}, because imports are listed
+         * in the function browser (so the user can see what the library depends on) yet carry no
+         * body -- a hit in {@code byName} would otherwise serve their empty pseudocode as if it
+         * were real output.
+         */
+        private Result externalOr(String name) {
+            return externals.contains(name)
+                ? new Result(410, errorJson("external symbol: " + name))
+                : null;
+        }
+
+        /** 404 for a name this cache simply does not carry. */
+        private Result missing(String name) {
+            return new Result(404, errorJson("function not found: " + name));
+        }
+
         Result decompile(String name) {
+            Result ext = externalOr(name);
+            if (ext != null) {
+                return ext;
+            }
             FuncEntry fe = find(name);
             if (fe == null) {
-                return new Result(404, errorJson("function not found: " + name));
+                return missing(name);
             }
             return new Result(200, "{\"pseudocode\":" + jsonString(fe.pseudocode)
                 + ",\"address\":" + jsonString(fe.address) + "}");
         }
 
         Result disassemble(String name) {
+            Result ext = externalOr(name);
+            if (ext != null) {
+                return ext;
+            }
             FuncEntry fe = find(name);
             if (fe == null) {
-                return new Result(404, errorJson("function not found: " + name));
+                return missing(name);
             }
             return new Result(200, "{\"disassembly\":" + jsonString(fe.disassembly)
                 + ",\"address\":" + jsonString(fe.address) + "}");
@@ -1449,9 +1493,13 @@ public class EmbeddedGhidraBridge {
          * "checked and found none" result callers need.
          */
         Result xrefs(String name) {
+            Result ext = externalOr(name);
+            if (ext != null) {
+                return ext;
+            }
             FuncEntry fe = find(name);
             if (fe == null) {
-                return new Result(404, errorJson("function not found: " + name));
+                return missing(name);
             }
             if (!xrefsKnown) {
                 return new Result(200, "{\"xrefsKnown\":false,\"callers\":[]}");
