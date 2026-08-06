@@ -6,7 +6,7 @@ Not a symbol list — real Ghidra pseudocode, one right-click from the Java meth
 Jexray is a [JADX](https://github.com/skylot/jadx) plugin that turns `native` Java methods into a live doorway into the `.so` that implements them. Right-click a native method, and Jexray finds the matching function in the APK's native library, decompiles it with Ghidra, and shows you real pseudocode — with clickable calls, caret-following, and full back/forward history — without ever leaving JADX.
 
 <p align="center">
-  <img alt="release" src="https://img.shields.io/badge/release-v0.1.0-brightgreen.svg">
+  <img alt="release" src="https://img.shields.io/badge/release-v0.2.0-brightgreen.svg">
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg">
   <img alt="java" src="https://img.shields.io/badge/Java-17%2B-orange.svg">
   <img alt="jadx" src="https://img.shields.io/badge/JADX-1.5.3%2B-4c1.svg">
@@ -85,7 +85,7 @@ jadx plugins --install "github:cys7885:jexray"
 
 ### Option B: download the prebuilt jar (no build tools required)
 
-Grab `jexray-<version>.jar` (e.g. `jexray-0.1.0.jar`) from the [latest release](https://github.com/cys7885/jexray/releases/latest). With the [GitHub CLI](https://cli.github.com/) it resolves the version for you:
+Grab `jexray-<version>.jar` (e.g. `jexray-0.2.0.jar`) from the [latest release](https://github.com/cys7885/jexray/releases/latest). With the [GitHub CLI](https://cli.github.com/) it resolves the version for you:
 
 ```sh
 gh release download --repo cys7885/jexray --pattern "jexray-*.jar"
