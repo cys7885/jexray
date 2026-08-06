@@ -89,6 +89,11 @@ public class LoadedLibrariesDialog extends JDialog {
 		getRootPane().getActionMap().put(FIND_ACTION_KEY, findAction);
 	}
 
+	/** Route a function node's activation to the Native View, as the All Functions browser does. */
+	public void setOnPickFunction(java.util.function.BiConsumer<String, String> onPickFunction) {
+		panel.setOnPickFunction(onPickFunction);
+	}
+
 	/** Replace the tree's data (resolved libraries, unresolved calls, unloaded .so's). */
 	public void setResult(Result result) {
 		panel.setResult(result);

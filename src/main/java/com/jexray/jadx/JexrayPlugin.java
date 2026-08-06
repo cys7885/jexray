@@ -1268,6 +1268,10 @@ public class JexrayPlugin implements JadxPlugin {
 		if (loadedLibrariesDialog == null) {
 			loadedLibrariesDialog = new LoadedLibrariesDialog(parent, this::openInJadx, this::loadLoadedLibraryFunctions,
 					this::readLoadedLibraryFunctionsForCount);
+			// Same handler the All Functions browser uses: open against the library the node sits
+			// under, not whatever was last viewed.
+			loadedLibrariesDialog.setOnPickFunction(
+					(pickedSoId, name) -> openSymbol(name, null, false, pickedSoId));
 		}
 		loadedLibrariesDialog.surface();
 

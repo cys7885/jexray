@@ -63,6 +63,14 @@ public class LoadedLibrariesPanel extends JPanel {
 	private static final int COUNT_DEBOUNCE_MS = 250;
 
 	private final Consumer<ICodeNodeRef> onNavigate; // jump to a load site's Java source
+
+	/**
+	 * Opens a native function in the Native View, the way the All Functions browser does. Set
+	 * after construction rather than taken as a constructor argument so the existing constructors
+	 * -- and the tests built on them -- keep working unchanged; null simply leaves function nodes
+	 * inert, which is how this panel behaved before.
+	 */
+	private java.util.function.BiConsumer<String, String> onPickFunction; // (soId, function name)
 	private final Consumer<String> onLibraryExpanded; // ask the owner to read this soId's symbols
 	// reads a library's exported function names for the bottom count label, for a library not
 	// already cached in functionsBySoId. Null in callers/tests that don't offer it -- such a
@@ -297,9 +305,15 @@ public class LoadedLibrariesPanel extends JPanel {
 	 * Rebuild the whole tree, applying the current filter query (if any). Mirrors
 	 * {@link LibraryTreePanel}'s approach: an empty query reproduces the unfiltered tree exactly (so
 	 * every existing "no filter" test/behaviour is unaffected); a non-empty query drops non-matching
-	 * entries from each of the three buckets, and drops a bucket entirely once it has no survivors --
-	 * but a resolved library, an unresolved call, or an unloaded .so that DOES match is never dropped,
-	 * upholding the same honesty contract the unfiltered tree already keeps.
+	 * entries from the unresolved and unloaded buckets, and drops such a bucket entirely once it has
+	 * no survivors -- but one that DOES match is never dropped, upholding the same honesty contract
+	 * the unfiltered tree already keeps.
+	 *
+	 * <p>Resolved libraries are the exception: they are always listed, filter or not, so the
+	 * "Loaded by"/"JNI methods"/"Functions" structure the user reads results against never
+	 * disappears mid-search. That mirrors the All Functions browser, which likewise filters only
+	 * within a library. Matching libraries are still called out in bold -- see
+	 * {@link #isMatchingCategoryNode}.
 	 */
 	private void rebuildTree() {
 		String query = query();
@@ -307,10 +321,12 @@ public class LoadedLibrariesPanel extends JPanel {
 		java.util.Set<String> expandedGroups = expandedGroupKeys();
 
 		root.removeAllChildren();
+		// Every resolved library stays in the tree while a filter is active, matching the All
+		// Functions browser: the filter narrows what is shown *under* a library, it does not decide
+		// whether the library exists. Dropping the node took away the "Loaded by"/"JNI
+		// methods"/"Functions" structure the user was reading the results against. Which libraries
+		// actually matched is still visible -- isMatchingCategoryNode renders those bold.
 		for (ResolvedLibrary lib : result.resolved()) {
-			if (!query.isEmpty() && !libraryMatches(lib, query)) {
-				continue;
-			}
 			DefaultMutableTreeNode node = new DefaultMutableTreeNode(lib);
 			DefaultMutableTreeNode sites = new DefaultMutableTreeNode("Loaded by (" + lib.loadSites().size() + ")");
 			for (LoadSite site : lib.loadSites()) {
@@ -573,16 +589,50 @@ public class LoadedLibrariesPanel extends JPanel {
 		return g;
 	}
 
+	public void setOnPickFunction(java.util.function.BiConsumer<String, String> onPickFunction) {
+		this.onPickFunction = onPickFunction;
+	}
+
 	private void activateSelection() {
 		TreePath path = tree.getSelectionPath();
 		if (path == null) {
 			return;
 		}
-		Object userObject = ((DefaultMutableTreeNode) path.getLastPathComponent()).getUserObject();
+		DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
+		Object userObject = node.getUserObject();
 		ICodeNodeRef ref = refOf(userObject);
 		if (ref != null && onNavigate != null) {
 			onNavigate.accept(ref);
+			return;
 		}
+		String soId = functionNodeSoId(node);
+		if (soId != null && onPickFunction != null) {
+			onPickFunction.accept(soId, (String) userObject);
+		}
+	}
+
+	/**
+	 * The library a function leaf belongs to, or null if this node is not one. Function leaves are
+	 * plain names under a "JNI methods"/"Functions" group under a {@link ResolvedLibrary} node --
+	 * a shape that also excludes the group headers themselves and the "…"/"(no matching
+	 * functions)" placeholders, which are Strings too.
+	 */
+	private String functionNodeSoId(DefaultMutableTreeNode node) {
+		if (!node.isLeaf() || !(node.getUserObject() instanceof String)) {
+			return null;
+		}
+		javax.swing.tree.TreeNode groupNode = node.getParent();
+		if (!(groupNode instanceof DefaultMutableTreeNode group)
+				|| !(group.getUserObject() instanceof String title)
+				|| !(title.startsWith("JNI methods") || title.startsWith("Functions"))) {
+			return null;
+		}
+		javax.swing.tree.TreeNode libNode = group.getParent();
+		if (libNode instanceof DefaultMutableTreeNode lib
+				&& lib.getUserObject() instanceof ResolvedLibrary resolved) {
+			return resolved.soId();
+		}
+		return null;
 	}
 
 	private static ICodeNodeRef refOf(Object userObject) {
