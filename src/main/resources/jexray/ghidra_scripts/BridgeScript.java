@@ -15,9 +15,13 @@
 
 import java.io.File;
 import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import ghidra.app.script.GhidraScript;
 import ghidra.app.decompiler.DecompInterface;
@@ -99,11 +103,22 @@ public class BridgeScript extends GhidraScript {
         }
     }
 
+    /**
+     * A PLT stub or GOT-level thunk: real code, but only a jump into the function that carries
+     * the same name. Listing these alongside their targets makes every exported symbol appear
+     * twice (and every import twice over, since it gets both kinds), so they are filtered out of
+     * the function list and never used as a lookup result. Calls that land on them are still
+     * attributed to the function they forward to -- see {@link #callersJson}.
+     */
+    private boolean isForwardingStub(Function f) {
+        return f.isThunk() || f.isExternal();
+    }
+
     private Function findFunction(String name) {
         FunctionManager fm = currentProgram.getFunctionManager();
         // exact match first
         for (Function f : fm.getFunctions(true)) {
-            if (f.getName().equals(name)) {
+            if (!isForwardingStub(f) && f.getName().equals(name)) {
                 return f;
             }
         }
@@ -111,6 +126,9 @@ public class BridgeScript extends GhidraScript {
         // naming): a request for "Java_..." should still find "_Java_..." and
         // vice-versa. Harmless for ELF Android .so where names match exactly.
         for (Function f : fm.getFunctions(true)) {
+            if (isForwardingStub(f)) {
+                continue;
+            }
             String fn = f.getName();
             if (fn.equals("_" + name) || name.equals("_" + fn)) {
                 return f;
@@ -185,6 +203,9 @@ public class BridgeScript extends GhidraScript {
         FunctionManager fm = currentProgram.getFunctionManager();
         int total = 0;
         for (Function f : fm.getFunctions(true)) {
+            if (isForwardingStub(f)) {
+                continue;
+            }
             total++;
         }
         writeProgress(progressFile, 0, total);
@@ -198,6 +219,9 @@ public class BridgeScript extends GhidraScript {
         try {
             decomp.openProgram(currentProgram);
             for (Function func : fm.getFunctions(true)) {
+                if (isForwardingStub(func)) {
+                    continue;
+                }
                 String pseudocode = "";
                 try {
                     DecompileResults res = decomp.decompileFunction(func, 60, new ConsoleTaskMonitor());
@@ -257,18 +281,36 @@ public class BridgeScript extends GhidraScript {
     private String callersJson(Function target) {
         ReferenceManager refMgr = currentProgram.getReferenceManager();
         Map<Function, Address> byCaller = new LinkedHashMap<>();
-        ReferenceIterator refs = refMgr.getReferencesTo(target.getEntryPoint());
-        while (refs.hasNext()) {
-            Reference ref = refs.next();
-            if (!ref.getReferenceType().isCall()) {
-                continue; // data references (e.g. a function-pointer table) are not "calls"
+        // A call to an exported function normally lands on its PLT stub, not on its body, so
+        // references to the entry point alone would only ever find that stub. Ghidra models the
+        // stub as a thunk, so ask for every thunk forwarding here -- recursively, because an
+        // imported symbol gets a PLT stub *and* a GOT-level thunk -- and treat calls to any of
+        // them as calls to this function.
+        List<Address> entryPoints = new ArrayList<>();
+        entryPoints.add(target.getEntryPoint());
+        Address[] thunkAddrs = target.getFunctionThunkAddresses(true);
+        if (thunkAddrs != null) {
+            for (Address t : thunkAddrs) {
+                entryPoints.add(t);
             }
-            Address from = ref.getFromAddress();
-            Function caller = getFunctionContaining(from);
-            if (caller == null) {
-                continue; // call site not inside any defined function -- nothing to navigate to
+        }
+        for (Address entryPoint : entryPoints) {
+            ReferenceIterator refs = refMgr.getReferencesTo(entryPoint);
+            while (refs.hasNext()) {
+                Reference ref = refs.next();
+                if (!ref.getReferenceType().isCall()) {
+                    continue; // data references (e.g. a function-pointer table) are not "calls"
+                }
+                Address from = ref.getFromAddress();
+                Function caller = getFunctionContaining(from);
+                if (caller == null) {
+                    continue; // call site not inside any defined function -- nothing to navigate to
+                }
+                if (caller.isThunk()) {
+                    continue; // a stub forwarding to us is not a caller the user can navigate to
+                }
+                byCaller.putIfAbsent(caller, from);
             }
-            byCaller.putIfAbsent(caller, from);
         }
         StringBuilder out = new StringBuilder("[");
         boolean first = true;
@@ -639,6 +681,9 @@ public class BridgeScript extends GhidraScript {
         sb.append("{\"functions\":[");
         boolean first = true;
         for (Function f : fm.getFunctions(true)) {
+            if (isForwardingStub(f)) {
+                continue;
+            }
             if (query == null || query.isEmpty() || f.getName().contains(query)) {
                 if (!first) {
                     sb.append(',');
