@@ -131,7 +131,7 @@ public final class NativeSymbols {
 			}
 			int b0 = magic[0] & 0xFF, b1 = magic[1] & 0xFF, b2 = magic[2] & 0xFF, b3 = magic[3] & 0xFF;
 			if (b0 == 0x7F && b1 == 0x45 && b2 == 0x4C && b3 == 0x46) {
-				parseElf(raf, out, false);
+				parseElf(raf, out, false, false);
 			} else {
 				int be = ((b0 & 0xFF) << 24) | ((b1 & 0xFF) << 16) | ((b2 & 0xFF) << 8) | (b3 & 0xFF);
 				if (be == FAT_MAGIC || be == FAT_CIGAM) {
@@ -167,7 +167,33 @@ public final class NativeSymbols {
 					|| magic[3] != 0x46) {
 				return out;
 			}
-			parseElf(raf, out, true);
+			parseElf(raf, out, true, false);
+		} catch (Exception ignored) {
+			// never throw for malformed input
+		}
+		return out;
+	}
+
+	/**
+	 * Symbols this library publishes in its dynamic symbol table -- the surface another library or
+	 * a {@code dlsym} call can reach. A strict subset of {@link #exportedSymbols}, which also
+	 * unions {@code .symtab} and so includes purely internal functions an unstripped build happens
+	 * to name.
+	 *
+	 * <p>ELF only, for the same reason {@link #importedSymbols} is.
+	 */
+	public static Set<String> dynamicExports(java.io.File file) {
+		Set<String> out = new LinkedHashSet<>();
+		if (file == null || !file.isFile()) {
+			return out;
+		}
+		try (RandomAccessFile raf = new RandomAccessFile(file, "r")) {
+			byte[] magic = read(raf, 0, 4);
+			if (magic == null || magic[0] != 0x7F || magic[1] != 0x45 || magic[2] != 0x4C
+					|| magic[3] != 0x46) {
+				return out;
+			}
+			parseElf(raf, out, false, true);
 		} catch (Exception ignored) {
 			// never throw for malformed input
 		}
@@ -176,8 +202,8 @@ public final class NativeSymbols {
 
 	// ---- ELF ----
 
-	private static void parseElf(RandomAccessFile raf, Set<String> out, boolean undefinedOnly)
-			throws IOException {
+	private static void parseElf(RandomAccessFile raf, Set<String> out, boolean undefinedOnly,
+			boolean dynsymOnly) throws IOException {
 		byte[] ident = read(raf, 0, 16);
 		if (ident == null) {
 			return;
@@ -223,7 +249,8 @@ public final class NativeSymbols {
 		// scan alone would miss. (Ghidra's own FUN_xxxx names exist in neither table.)
 		for (int i = 0; i < shnum; i++) {
 			int type = sh.getInt(i * shentsize + 4);
-			if (type == SHT_DYNSYM || type == SHT_SYMTAB) {
+			boolean wanted = dynsymOnly ? type == SHT_DYNSYM : (type == SHT_DYNSYM || type == SHT_SYMTAB);
+			if (wanted) {
 				readElfSymtab(raf, sh, i, shentsize, shnum, is64, order, out, undefinedOnly);
 			}
 		}

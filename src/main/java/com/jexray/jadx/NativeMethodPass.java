@@ -53,7 +53,21 @@ public class NativeMethodPass implements JadxDecompilePass {
 		this.root = root;
 		nativeMethods.clear();
 		loadLibraryCalls.clear();
+		if (onInputLoaded != null) {
+			onInputLoaded.run();
+		}
 	}
+
+	/**
+	 * Called each time a new input starts decompiling -- the earliest point at which the plugin
+	 * knows an APK is present. Optional; null in tests and in any construction that has no use for
+	 * it.
+	 */
+	public void setOnInputLoaded(Runnable onInputLoaded) {
+		this.onInputLoaded = onInputLoaded;
+	}
+
+	private Runnable onInputLoaded;
 
 	@Override
 	public boolean visit(ClassNode cls) {

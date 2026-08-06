@@ -90,6 +90,14 @@ public class LibraryTreePanel extends JPanel {
 	 */
 	private final Map<String, Set<String>> externalsBySoId = new LinkedHashMap<>();
 
+	/**
+	 * Per library, the listed names it publishes in its dynamic symbol table -- what another
+	 * library or a {@code dlsym} call can reach. Populated separately from {@link #setFunctions}
+	 * for the same reason {@link #externalsBySoId} is; a library with no entry simply groups
+	 * everything defined under "Functions", as before.
+	 */
+	private final Map<String, Set<String>> exportsBySoId = new LinkedHashMap<>();
+
 	// per-library "does it match the current filter" state, so a COLLAPSED library (never expanded,
 	// so functionsBySoId has no entry for it) can still bold once its match is known -- reuses
 	// exactly the count machinery recomputeTotal() already runs for the bottom total, instead of a
@@ -362,6 +370,11 @@ public class LibraryTreePanel extends JPanel {
 		externalsBySoId.put(soId, names == null ? Set.of() : new java.util.HashSet<>(names));
 	}
 
+	/** Mark which of {@code soId}'s listed names it publishes for others to link against. */
+	public void setExportedNames(String soId, Set<String> names) {
+		exportsBySoId.put(soId, names == null ? Set.of() : new java.util.HashSet<>(names));
+	}
+
 	public void setFunctions(String soId, List<String> names) {
 		functionsBySoId.put(soId, names == null ? List.of() : new ArrayList<>(names));
 		rebuild();
@@ -547,28 +560,38 @@ public class LibraryTreePanel extends JPanel {
 			model.nodeStructureChanged(node);
 			return;
 		}
-		// Three groups, split by what the entry is rather than by how it reads: an imported name is
-		// listed so the library's dependencies are visible, but it has no body here and opening it
-		// can only explain that. Keeping it in its own group says so structurally -- no styling for
-		// the user to notice or miss.
+		// Grouped by what the entry is in linkage terms rather than by how it reads, so each group
+		// answers a different question: which entry points Java can bind to, which functions are
+		// internal to this library, which surface it publishes for anything else to call, and what
+		// it links against but does not contain. Structure says it -- no styling to notice or miss.
+		//
+		// JNI methods are exported too, so they are claimed first and "Exports" means the rest of
+		// the published surface; otherwise the two groups would overlap.
 		Set<String> external = externalsBySoId.getOrDefault(lib.soId(), Set.of());
+		Set<String> exported = exportsBySoId.getOrDefault(lib.soId(), Set.of());
 		List<String> jni = new ArrayList<>();
-		List<String> other = new ArrayList<>();
+		List<String> internal = new ArrayList<>();
+		List<String> exports = new ArrayList<>();
 		List<String> imports = new ArrayList<>();
 		for (String n : names) {
 			if (external.contains(n)) {
 				imports.add(n);
 			} else if (isJniEntryPoint(n)) {
 				jni.add(n);
+			} else if (exported.contains(n)) {
+				exports.add(n);
 			} else {
-				other.add(n);
+				internal.add(n);
 			}
 		}
 		if (!jni.isEmpty()) {
 			node.add(group("JNI methods", jni));
 		}
-		if (!other.isEmpty()) {
-			node.add(group("Functions", other));
+		if (!internal.isEmpty()) {
+			node.add(group("Functions", internal));
+		}
+		if (!exports.isEmpty()) {
+			node.add(group("Exports", exports));
 		}
 		if (!imports.isEmpty()) {
 			node.add(group("Imports", imports));

@@ -142,6 +142,13 @@ public class JexrayPlugin implements JadxPlugin {
 	 * that can actually be opened.
 	 */
 	private final Map<String, Set<String>> externalNamesBySoId = new ConcurrentHashMap<>();
+
+	/** Per library, which listed names it publishes in its dynamic symbol table. */
+	private final Map<String, Set<String>> exportedNamesBySoId = new ConcurrentHashMap<>();
+
+	/** Guards against stacking up analyze-all sweeps when several windows are opened in a row. */
+	private final java.util.concurrent.atomic.AtomicBoolean analyzeAllInFlight =
+			new java.util.concurrent.atomic.AtomicBoolean();
 	private LoadedLibrariesDialog loadedLibrariesDialog;
 	private Timer syncTimer;
 	private EmbeddedGhidraBridge embeddedBridge;
@@ -166,6 +173,12 @@ public class JexrayPlugin implements JadxPlugin {
 	public void init(JadxPluginContext context) {
 		this.context = context;
 		context.registerOptions(options);
+		// "analyze everything up front" is off by default, so this normally does nothing
+		nativeMethodPass.setOnInputLoaded(() -> {
+			if (options.isAnalyzeAllOnOpen()) {
+				analyzeAllLibraries();
+			}
+		});
 		context.addPass(nativeMethodPass);
 
 		this.cacheDir = Paths.get(System.getProperty("java.io.tmpdir"), "jexray-so");
@@ -985,7 +998,58 @@ public class JexrayPlugin implements JadxPlugin {
 	}
 
 	/** Load a specific .so (on demand) and (re)populate the function picker with its functions. */
+	/**
+	 * Analyze every native library in the APK, one after another on a single background thread.
+	 *
+	 * <p>Sequential on purpose: {@code analyzeHeadless} is CPU- and memory-hungry, and running one
+	 * per library at once would starve the machine and the UI along with it. Libraries already
+	 * analyzed are skipped by {@link #ensureBridgeLoaded}, so calling this repeatedly costs nothing
+	 * beyond the walk, and a failure on one library must not stop the rest -- the user asked for
+	 * everything, not for everything up to the first problem.
+	 */
+	/**
+	 * Start a full sweep when a Jexray window is opened, if the user left that on. Fire-and-forget:
+	 * the window opens immediately and libraries become browsable as each finishes, rather than the
+	 * window waiting on the whole APK.
+	 */
+	private void maybeAnalyzeAllOnBrowse() {
+		if (options.isAnalyzeAllOnBrowse()) {
+			analyzeAllLibraries();
+		}
+	}
+
+	private void analyzeAllLibraries() {
+		if (!analyzeAllInFlight.compareAndSet(false, true)) {
+			return; // one sweep at a time; a second request would only queue behind the first
+		}
+		Thread worker = new Thread(() -> {
+			try {
+				GhidraBridgeClient client = new GhidraBridgeClient(resolveBridgeUrl());
+				for (String soId : getSoManager().soIds()) {
+					if (readySoIds.contains(soId)) {
+						continue;
+					}
+					try {
+						ensureBridgeLoaded(client, soId, null);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+						return;
+					} catch (Exception e) {
+						LOG.warn("Analyze-all: {} failed, continuing", soId, e);
+					}
+				}
+			} catch (Exception e) {
+				LOG.warn("Analyze-all could not start", e);
+			} finally {
+				analyzeAllInFlight.set(false);
+			}
+		}, "jexray-analyze-all");
+		worker.setDaemon(true);
+		worker.start();
+	}
+
 	private void loadFunctionsAndShowPicker(String soId) {
+		maybeAnalyzeAllOnBrowse();
 		JadxGuiContext gui = context.getGuiContext();
 		NativeViewDialog d = getOrCreateDialog(gui);
 		Thread worker = new Thread(() -> {
@@ -1008,6 +1072,7 @@ public class JexrayPlugin implements JadxPlugin {
 				}
 				Collections.sort(names);
 				externalNamesBySoId.put(soId, external);
+				exportedNamesBySoId.put(soId, dynamicExportsOf(soId));
 				showFunctionPicker(gui, soId, names);
 			} catch (BridgeException e) {
 				LOG.warn("All-functions listing failed [{}]", e.getKind(), e);
@@ -1276,6 +1341,7 @@ public class JexrayPlugin implements JadxPlugin {
 	 * either, so none of this depends on any library having been analyzed.
 	 */
 	private void showLoadedLibraries() {
+		maybeAnalyzeAllOnBrowse();
 		JadxGuiContext gui = context.getGuiContext();
 		JFrame parent = gui == null ? null : gui.getMainFrame();
 		if (loadedLibrariesDialog == null) {
@@ -1422,6 +1488,22 @@ public class JexrayPlugin implements JadxPlugin {
 		worker.start();
 	}
 
+	/**
+	 * What {@code soId} publishes in its dynamic symbol table, read straight from the extracted
+	 * library. Read here rather than taken from the analysis cache because it is a linkage fact
+	 * about the file, not something the decompiler determines. An unreadable library yields an
+	 * empty set, which groups everything defined as internal -- the behaviour before this existed.
+	 */
+	private Set<String> dynamicExportsOf(String soId) {
+		try {
+			ExtractedSo es = getSoManager().extractedForId(soId);
+			return es == null ? Set.of() : NativeSymbols.dynamicExports(es.path().toFile());
+		} catch (IOException e) {
+			LOG.warn("Could not read dynamic exports for {}", soId, e);
+			return Set.of();
+		}
+	}
+
 	private synchronized void showFunctionPicker(JadxGuiContext gui, String soId, List<String> names) {
 		List<LibraryEntry> libraries = describeLibraries();
 		Runnable show = () -> {
@@ -1439,6 +1521,7 @@ public class JexrayPlugin implements JadxPlugin {
 			}
 			// after the names, so the browser already has the entries these apply to
 			functionListDialog.setExternalNames(soId, externalNamesBySoId.get(soId));
+			functionListDialog.setExportedNames(soId, exportedNamesBySoId.get(soId));
 			functionListDialog.surface();
 		};
 		if (gui != null) {
