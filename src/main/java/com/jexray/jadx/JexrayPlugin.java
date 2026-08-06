@@ -146,6 +146,12 @@ public class JexrayPlugin implements JadxPlugin {
 	/** Per library, which listed names it publishes in its dynamic symbol table. */
 	private final Map<String, Set<String>> exportedNamesBySoId = new ConcurrentHashMap<>();
 
+	/** Per library, which listed names are bound to a Java method by {@code RegisterNatives}. */
+	private final Map<String, Set<String>> registeredNamesBySoId = new ConcurrentHashMap<>();
+
+	/** Cache behind {@link #registeredSymbolsOf}; the table cannot change without a re-analysis. */
+	private final Map<String, Set<String>> registeredSymbolsBySoId = new ConcurrentHashMap<>();
+
 	/** Guards against stacking up analyze-all sweeps when several windows are opened in a row. */
 	private final java.util.concurrent.atomic.AtomicBoolean analyzeAllInFlight =
 			new java.util.concurrent.atomic.AtomicBoolean();
@@ -1073,6 +1079,7 @@ public class JexrayPlugin implements JadxPlugin {
 				Collections.sort(names);
 				externalNamesBySoId.put(soId, external);
 				exportedNamesBySoId.put(soId, dynamicExportsOf(soId));
+				registeredNamesBySoId.put(soId, registeredSymbolsOf(client, soId));
 				showFunctionPicker(gui, soId, names);
 			} catch (BridgeException e) {
 				LOG.warn("All-functions listing failed [{}]", e.getKind(), e);
@@ -1502,6 +1509,42 @@ public class JexrayPlugin implements JadxPlugin {
 			LOG.warn("Could not read dynamic exports for {}", soId, e);
 			return Set.of();
 		}
+	}
+
+	/**
+	 * The functions a library binds to Java through {@code RegisterNatives}, by symbol.
+	 *
+	 * <p>Deliberately not {@link #registeredNativeRefs}: that one only keeps an entry once the
+	 * matching Java method has been seen by the decompile pass, because its job is to hand back a
+	 * reference to navigate to. Grouping needs no such reference -- the registration table alone
+	 * establishes that a function is an entry point -- and requiring one would silently drop every
+	 * entry whose Java class the user has not opened yet, which is most of them while browsing.
+	 */
+	private Set<String> registeredSymbolsOf(GhidraBridgeClient client, String soId) {
+		return registeredSymbolsBySoId.computeIfAbsent(soId, id -> {
+			if (!getSoManager().soIdsWithExport("JNI_OnLoad").contains(id)) {
+				return Set.of(); // nothing registers without a JNI_OnLoad to do it in
+			}
+			try {
+				RegisterNativesResult rn = client.registerNatives(id);
+				if (rn == null || rn.methods == null) {
+					return Set.of();
+				}
+				Set<String> out = new HashSet<>();
+				for (RegNative e : rn.methods) {
+					if (e != null && e.symbol != null && !e.symbol.isEmpty()) {
+						out.add(e.symbol);
+					}
+				}
+				return out;
+			} catch (BridgeException ex) {
+				LOG.warn("RegisterNatives listing failed [{}] for {}", ex.getKind(), id, ex);
+				return Set.of();
+			} catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+				return Set.of();
+			}
+		});
 	}
 
 	private synchronized void showFunctionPicker(JadxGuiContext gui, String soId, List<String> names) {
