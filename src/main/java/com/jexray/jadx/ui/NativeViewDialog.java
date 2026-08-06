@@ -1139,6 +1139,23 @@ public class NativeViewDialog extends JDialog {
 	}
 
 	/** Transient error state; does not affect history. */
+	/**
+	 * A lookup that came back with nothing, reported without taking over the view.
+	 *
+	 * <p>Two things have to happen together. The user gets told, in a card rather than a status
+	 * line they may never look at. And the symbol is recorded as the current error, so a bug report
+	 * filed straight afterwards is about the lookup that just failed -- before this, the dialog
+	 * still held whatever was open beforehand, and the report described that instead.
+	 */
+	public void showUnresolved(String symbol, String message) {
+		onEdt(() -> {
+			errorSymbol = symbol;
+			errorMessage = message;
+			reportErrorButton.setVisible(onReportBug != null);
+			showToast("⚠", "Not resolvable", message);
+		});
+	}
+
 	public void showError(String symbol, String message) {
 		onEdt(() -> {
 			progressActive = false;
@@ -1153,6 +1170,11 @@ public class NativeViewDialog extends JDialog {
 			pseudoArea.setCaretPosition(0);
 			updateNavButtons();
 			surface();
+			// The view already says it, but only where the user happens to be looking. The card
+			// carries the same text to where attention is, and puts it on the clipboard for a
+			// bug report -- the quiet path has done this all along; there is no reason an
+			// explicitly requested lookup should say less.
+			showToast("⚠", "Not resolvable", message);
 		});
 	}
 

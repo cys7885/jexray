@@ -421,11 +421,18 @@ public class JexrayPlugin implements JadxPlugin {
 				}
 			}
 			if (soId == null) {
-				// truly absent from every .so in the chosen ABI -> RegisterNatives hint
+				// Say what was tried, not just that it failed. Every route has its own reason for
+				// coming up empty -- no exported symbol under the mangled name, no registration
+				// table to consult, no library exporting the plain method name -- and which one it
+				// was decides what to do next. Without this the user sees the same sentence
+				// whatever the cause, and so does anyone they report it to.
+				String tried = describeResolutionAttempts(mgr, symbol, nativeCtx);
 				if (silentNotFound) {
-					d.flashStatus("Not a resolvable function: " + symbol);
+					d.showUnresolved(symbol, "No native function named " + symbol + " was found in "
+							+ "any library of the chosen ABI. " + tried);
 				} else {
-					d.showError(symbol, BridgeMessages.forFailure(BridgeException.Kind.NOT_FOUND, symbol, client.getBaseUrl()));
+					d.showError(symbol, BridgeMessages.forFailure(BridgeException.Kind.NOT_FOUND,
+							symbol, client.getBaseUrl()) + "\n// " + tried);
 				}
 				return;
 			}
@@ -502,7 +509,8 @@ public class JexrayPlugin implements JadxPlugin {
 			}
 			LOG.warn("Native view fetch failed for {} [{}]", symbol, e.getKind(), e);
 			if (silentNotFound && e.getKind() == BridgeException.Kind.NOT_FOUND) {
-				d.flashStatus("Not a resolvable function: " + symbol);
+				d.showUnresolved(symbol, "The library holds no function named " + symbol + ". It may "
+						+ "belong to a different library or ABI, or have been inlined or stripped.");
 			} else {
 				d.showError(symbol, BridgeMessages.forFailure(e.getKind(), symbol, client.getBaseUrl(), e.getMessage()));
 			}
