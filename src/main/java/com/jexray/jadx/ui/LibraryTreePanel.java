@@ -212,7 +212,6 @@ public class LibraryTreePanel extends JPanel {
 				Object shown = value;
 				boolean bold = false;
 				boolean dim = false;
-				boolean external = false;
 				String query = filterField.getText();
 				if (value instanceof DefaultMutableTreeNode n) {
 					if (n.getUserObject() instanceof LibraryEntry lib) {
@@ -222,12 +221,6 @@ public class LibraryTreePanel extends JPanel {
 						String highlighted = highlightMatch(name, query);
 						if (highlighted != null) {
 							shown = highlighted;
-						}
-						// an imported name is listed but cannot be opened: set it apart in italic,
-						// muted, and marked, rather than letting the user find out by clicking
-						external = isExternalName(n, name);
-						if (external) {
-							shown = withExternalMarker(highlighted != null ? highlighted : name);
 						}
 					}
 					bold = isMatchingCategoryNode(n, query);
@@ -369,25 +362,6 @@ public class LibraryTreePanel extends JPanel {
 		externalsBySoId.put(soId, names == null ? Set.of() : new java.util.HashSet<>(names));
 	}
 
-	/** Whether {@code name}, sitting under {@code node}'s library, is one of those. */
-	private boolean isExternalName(DefaultMutableTreeNode node, String name) {
-		for (javax.swing.tree.TreeNode p = node.getParent(); p != null; p = p.getParent()) {
-			if (p instanceof DefaultMutableTreeNode d && d.getUserObject() instanceof LibraryEntry lib) {
-				Set<String> ext = externalsBySoId.get(lib.soId());
-				return ext != null && ext.contains(name);
-			}
-		}
-		return false;
-	}
-
-	/** Append the "lives elsewhere" marker, preserving any highlight markup already applied. */
-	private static String withExternalMarker(String label) {
-		String body = label.startsWith("<html>")
-				? label.substring("<html>".length(), label.length() - "</html>".length())
-				: escapeHtml(label);
-		return "<html>" + body + "&nbsp;&nbsp;↗</html>";
-	}
-
 	public void setFunctions(String soId, List<String> names) {
 		functionsBySoId.put(soId, names == null ? List.of() : new ArrayList<>(names));
 		rebuild();
@@ -433,7 +407,7 @@ public class LibraryTreePanel extends JPanel {
 			if (expanded.contains(lib.soId()) || (!query.isEmpty() && !filtered(functionsBySoId.get(lib.soId()), query).isEmpty())) {
 				rebuildChildren(n, lib);
 				tree.expandPath(new TreePath(new Object[] { root, n }));
-				// re-open the function groups ("JNI methods"/"Functions") that were open, keyed by
+				// re-open the groups ("JNI methods"/"Functions"/"Imports") that were open, keyed by
 				// title (the count in the label changes as the filter narrows, the title doesn't)
 				for (int j = 0; j < n.getChildCount(); j++) {
 					DefaultMutableTreeNode grp = (DefaultMutableTreeNode) n.getChildAt(j);
@@ -573,16 +547,31 @@ public class LibraryTreePanel extends JPanel {
 			model.nodeStructureChanged(node);
 			return;
 		}
+		// Three groups, split by what the entry is rather than by how it reads: an imported name is
+		// listed so the library's dependencies are visible, but it has no body here and opening it
+		// can only explain that. Keeping it in its own group says so structurally -- no styling for
+		// the user to notice or miss.
+		Set<String> external = externalsBySoId.getOrDefault(lib.soId(), Set.of());
 		List<String> jni = new ArrayList<>();
 		List<String> other = new ArrayList<>();
+		List<String> imports = new ArrayList<>();
 		for (String n : names) {
-			(isJniEntryPoint(n) ? jni : other).add(n);
+			if (external.contains(n)) {
+				imports.add(n);
+			} else if (isJniEntryPoint(n)) {
+				jni.add(n);
+			} else {
+				other.add(n);
+			}
 		}
 		if (!jni.isEmpty()) {
 			node.add(group("JNI methods", jni));
 		}
 		if (!other.isEmpty()) {
 			node.add(group("Functions", other));
+		}
+		if (!imports.isEmpty()) {
+			node.add(group("Imports", imports));
 		}
 		model.nodeStructureChanged(node);
 	}
@@ -627,7 +616,7 @@ public class LibraryTreePanel extends JPanel {
 	 * subtree contains at least one filter match, so the renderer can bold it without a second,
 	 * separate match test that could disagree with what the tree actually shows.
 	 *
-	 * <p>A group node ("JNI methods (n)"/"Functions (n)") only ever exists in the tree once
+	 * <p>A group node ("JNI methods (n)", "Functions (n)", "Imports (n)") only ever exists once
 	 * {@link #rebuildChildren} has already narrowed its children down to matches (an empty result
 	 * gets a plain placeholder instead, never an empty group) -- so under an active filter, a group
 	 * node's mere presence already proves it contains a match. A library node instead consults
@@ -683,7 +672,7 @@ public class LibraryTreePanel extends JPanel {
 	 * True for a leaf that is an actual function name (as opposed to a placeholder like
 	 * "(analyzing…)" or "(no matching functions)", which is also a leaf {@link String} node).
 	 * Distinguished structurally, not by sniffing the text: a function name's parent is always a
-	 * "JNI methods"/"Functions" group header (itself a {@link String} node -- see {@link #group}),
+	 * group header -- itself a {@link String} node, see {@link #group} --
 	 * whereas a placeholder is added directly under the {@link LibraryEntry} node it stands in for
 	 * (see {@link #rebuildChildren}) -- so this can never mistake one for the other regardless of
 	 * what a real symbol happens to be named. Package-visible: {@link LoadedLibrariesPanel} builds
@@ -766,7 +755,7 @@ public class LibraryTreePanel extends JPanel {
 		return keys;
 	}
 
-	/** "JNI methods (5)" -> "JNI methods": the stable part of a group label, without its match count. */
+	/** "Imports (5)" -> "Imports": the stable part of a group label, without its match count. */
 	private static String groupTitle(String label) {
 		int p = label.lastIndexOf(" (");
 		return p < 0 ? label : label.substring(0, p);
