@@ -602,6 +602,7 @@ public class NativeViewDialog extends JDialog {
 		area.setCodeFoldingEnabled(true);
 		area.setAntiAliasingEnabled(true);
 		area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, fontSize));
+		DialogUtils.installClipboardShortcuts(area);
 		return area;
 	}
 
@@ -691,6 +692,33 @@ public class NativeViewDialog extends JDialog {
 		JMenuItem item = new JMenuItem("Show xrefs");
 		item.addActionListener(e -> requestXrefs());
 		menu.add(item);
+
+		// Attaching our own popup replaces the one RSyntaxTextArea ships, which carried Copy and
+		// Select All -- so put them back. These call the component directly rather than going
+		// through the editor kit's action map, giving a copy path that holds regardless of how the
+		// keyboard bindings resolve.
+		menu.addSeparator();
+		JMenuItem copyItem = new JMenuItem("Copy");
+		copyItem.addActionListener(e -> area.copy());
+		menu.add(copyItem);
+		JMenuItem selectAllItem = new JMenuItem("Select All");
+		selectAllItem.addActionListener(e -> area.selectAll());
+		menu.add(selectAllItem);
+		menu.addPopupMenuListener(new javax.swing.event.PopupMenuListener() {
+			@Override
+			public void popupMenuWillBecomeVisible(javax.swing.event.PopupMenuEvent e) {
+				copyItem.setEnabled(area.getSelectedText() != null);
+			}
+
+			@Override
+			public void popupMenuWillBecomeInvisible(javax.swing.event.PopupMenuEvent e) {
+			}
+
+			@Override
+			public void popupMenuCanceled(javax.swing.event.PopupMenuEvent e) {
+			}
+		});
+
 		area.addMouseListener(new MouseAdapter() {
 			@Override
 			public void mousePressed(MouseEvent e) {

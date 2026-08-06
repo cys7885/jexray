@@ -42,6 +42,7 @@ final class CodeSearchBar extends JToolBar {
 
 		// plain FlatLaf client-property keys (no compile dependency on FlatLaf itself)
 		field.putClientProperty("JTextField.showClearButton", true);
+		DialogUtils.installClipboardShortcuts(field);
 		field.addKeyListener(new KeyAdapter() {
 			@Override
 			public void keyPressed(KeyEvent e) {
