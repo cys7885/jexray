@@ -480,17 +480,7 @@ public class JexrayPlugin implements JadxPlugin {
 				disasm = "; disassembly unavailable: " + BridgeMessages.forFailure(e.getKind(), symbol, client.getBaseUrl());
 			}
 			if (javaRef == null) {
-				// Still unresolved: this symbol isn't any Java method's exported JNI name (the
-				// index checked in openSymbol), but it may be a RegisterNatives target reached by
-				// its Ghidra name -- e.g. following a call from a JNI_OnLoad registrar, or picking
-				// it straight from All Functions. Reverse-match it against the same table
-				// resolveViaRegisterNatives uses going the other way.
-				NativeMethod registered = lookupRegistered(registeredNativeRefs(client, soId), symbol);
-				if (registered != null) {
-					javaRef = registered.ref();
-				} else {
-					javaRef = javaRefByName(symbol);
-				}
+				javaRef = reverseJavaRef(client, soId, symbol);
 			}
 			NativeFunctionView view = new NativeFunctionView(soId, symbol, dec.address, dec.pseudocode, disasm, javaRef);
 			viewCache.put(cacheKey(soId, symbol), view);
@@ -695,6 +685,31 @@ public class JexrayPlugin implements JadxPlugin {
 			return false;
 		}
 		return a.equals(b) || ("_" + a).equals(b) || a.equals("_" + b);
+	}
+
+	/**
+	 * The Java {@code native} method a function reached by its native name implements, or null when
+	 * nothing claims it. Tries the library's registration table first -- the only authoritative
+	 * answer for a dynamically bound method -- then the by-name fallback.
+	 *
+	 * <p>Never throws. Its answer decides one thing, whether "Go to Java Source" is enabled, so it
+	 * must not be able to cost the user the pseudocode as well: the caller builds and shows the view
+	 * only after this returns, and its catch list covers the bridge's own failures, so an unexpected
+	 * one escaping this far would end the worker and leave the dialog loading with no explanation.
+	 */
+	private ICodeNodeRef reverseJavaRef(GhidraBridgeClient client, String soId, String symbol) {
+		try {
+			// This symbol isn't any Java method's exported JNI name (the index checked in
+			// openSymbol), but it may be a RegisterNatives target reached by its Ghidra name -- e.g.
+			// following a call from a JNI_OnLoad registrar, or picking it straight from All
+			// Functions. Reverse-match it against the same table resolveViaRegisterNatives uses
+			// going the other way.
+			NativeMethod registered = lookupRegistered(registeredNativeRefs(client, soId), symbol);
+			return registered != null ? registered.ref() : javaRefByName(symbol);
+		} catch (RuntimeException e) {
+			LOG.warn("Could not look up a Java method for a function in {}; leaving it unlinked", soId, e);
+			return null;
+		}
 	}
 
 	/**
@@ -1682,10 +1697,13 @@ public class JexrayPlugin implements JadxPlugin {
 	 * {@code root.getClasses()}), though this one doesn't even need to read bytecode: "native" is
 	 * an access flag on the method itself.
 	 *
-	 * <p>Built once, on the first javaRef lookup that misses {@link #nativeMethodPass}'s lazy map
-	 * (see {@code openSymbol}), and memoized like {@link #getLoadLibraryCalls()} -- so a normal
-	 * session where every native method's class happens to get opened never pays this cost, and a
-	 * session that does pay it only pays once.
+	 * <p>Built once, on the first javaRef lookup that {@link #nativeMethodPass}'s lazy map cannot
+	 * answer -- in either direction, from a Java method or back from a native one (see
+	 * {@code openSymbol} and {@link #allNativeMethods}) -- and memoized like
+	 * {@link #getLoadLibraryCalls()}, so a session pays this at most once. Being a lazy singleton
+	 * guarded by the plugin monitor, whichever thread builds it holds that monitor for the walk;
+	 * the other holders are short (see {@link #getSoManager()}, {@link #getOrCreateDialog}), and
+	 * the walk itself takes no further lock, so it cannot deadlock against them.
 	 */
 	private Map<String, NativeMethod> getEagerNativeMethodIndex() {
 		Map<String, NativeMethod> idx = eagerNativeMethodIndex;
