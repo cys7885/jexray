@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -697,6 +698,22 @@ public class JexrayPlugin implements JadxPlugin {
 	}
 
 	/**
+	 * Every {@code native} method in the input, keyed by JNI export symbol.
+	 *
+	 * <p>The decompile pass only records the methods it has visited -- in jadx-gui, the classes the
+	 * user has opened -- so on its own it answers differently depending on where the user has been.
+	 * Unioning it with the metadata-only scan of the whole input removes that dependence: a lookup
+	 * gives the same answer whether the function is reached from its Java method or picked straight
+	 * out of the browser. The pass's entry wins on overlap, being the one built from a node the GUI
+	 * has already materialised.
+	 */
+	private Map<String, NativeMethod> allNativeMethods() {
+		Map<String, NativeMethod> merged = new HashMap<>(getEagerNativeMethodIndex());
+		merged.putAll(nativeMethodPass.getNativeMethods());
+		return merged;
+	}
+
+	/**
 	 * The Java {@code native} method a symbol implements, found by name.
 	 *
 	 * <p>Only reached when the registration table could not answer -- which includes every library
@@ -706,18 +723,20 @@ public class JexrayPlugin implements JadxPlugin {
 	 *
 	 * <p>Returns null when more than one Java method could claim the symbol: a guess that picks
 	 * arbitrarily between them would send the user somewhere false, which is worse than leaving
-	 * the button disabled.
+	 * the button disabled. Two entries of {@link #allNativeMethods} are always two different Java
+	 * methods -- the map is keyed by export symbol -- so a second match is reason enough to stop,
+	 * including when both declare the same method name in different classes.
 	 */
 	private ICodeNodeRef javaRefByName(String symbol) {
 		if (symbol == null || symbol.isEmpty()) {
 			return null;
 		}
 		NativeMethod unique = null;
-		for (NativeMethod nm : nativeMethodPass.getNativeMethods().values()) {
+		for (NativeMethod nm : allNativeMethods().values()) {
 			if (nm == null || !sameNativeName(nm.methodName(), symbol)) {
 				continue;
 			}
-			if (unique != null && !unique.methodName().equals(nm.methodName())) {
+			if (unique != null) {
 				LOG.info("Name-match for {} is ambiguous across Java methods; not guessing", symbol);
 				return null;
 			}
@@ -997,10 +1016,9 @@ public class JexrayPlugin implements JadxPlugin {
 	}
 
 	private Map<String, NativeMethod> registeredNativeRefs(GhidraBridgeClient client, String soId) {
-		// An empty result is not memoised. It usually means the decompile pass had not yet seen the
-		// Java class whose methods this matches against -- which is the normal state while browsing
-		// the native side first -- and caching that would keep the link to Java missing for the rest
-		// of the session even after the class is opened.
+		// An empty result is not memoised: it means the registration table itself could not be read
+		// (a bridge call that failed or came back before analysis settled), and caching that would
+		// keep the link to Java missing for the rest of the session even once the table is readable.
 		Map<String, NativeMethod> known = registeredNativeRefsBySoId.get(soId);
 		if (known != null && !known.isEmpty()) {
 			return known;
@@ -1023,11 +1041,13 @@ public class JexrayPlugin implements JadxPlugin {
 					return Map.of();
 				}
 				Map<String, NativeMethod> out = new java.util.HashMap<>();
+				// Whole-input, so which classes the user has opened cannot change the answer.
+				Collection<NativeMethod> candidates = allNativeMethods().values();
 				for (RegNative e : rn.methods) {
 					if (e == null || e.name == null || e.symbol == null) {
 						continue;
 					}
-					for (NativeMethod nm : nativeMethodPass.getNativeMethods().values()) {
+					for (NativeMethod nm : candidates) {
 						boolean nameMatch = nm.methodName().equals(e.name);
 						boolean sigOk = nm.signature() == null || e.signature == null
 								|| nm.signature().equals(e.signature);
@@ -1765,11 +1785,10 @@ public class JexrayPlugin implements JadxPlugin {
 	/**
 	 * The functions a library binds to Java through {@code RegisterNatives}, by symbol.
 	 *
-	 * <p>Deliberately not {@link #registeredNativeRefs}: that one only keeps an entry once the
-	 * matching Java method has been seen by the decompile pass, because its job is to hand back a
-	 * reference to navigate to. Grouping needs no such reference -- the registration table alone
-	 * establishes that a function is an entry point -- and requiring one would silently drop every
-	 * entry whose Java class the user has not opened yet, which is most of them while browsing.
+	 * <p>Deliberately not {@link #registeredNativeRefs}: that one keeps only the entries it can pair
+	 * with a Java method, because its job is to hand back a reference to navigate to. Grouping needs
+	 * no such reference -- the registration table alone establishes that a function is an entry
+	 * point -- so an entry belongs in this set even when no Java method claims it.
 	 */
 	private Set<String> registeredSymbolsOf(GhidraBridgeClient client, String soId) {
 		return registeredSymbolsBySoId.computeIfAbsent(soId, id -> {
