@@ -50,6 +50,13 @@ public class BridgeScript extends GhidraScript {
     // an explicit "1". EmbeddedGhidraBridge.CURRENT_CACHE_FORMAT_VERSION on the server side must
     // be kept equal to this: the two live in separate compilation units (this file is compiled by
     // Ghidra at runtime from a bundled resource, not by Maven) with no shared constant possible.
+    /**
+     * Upper bound on dump passes. Each pass picks up functions the previous one caused Ghidra to
+     * define; the count converges quickly, and the bound only stops a pathological program from
+     * looping forever.
+     */
+    private static final int MAX_DUMP_ROUNDS = 10;
+
     private static final int CACHE_FORMAT_VERSION = 2;
 
     @Override
@@ -213,15 +220,25 @@ public class BridgeScript extends GhidraScript {
 
     // One-shot: decompile + disassemble every function, write a single JSON cache
     // the server serves all later queries from. Streams progress as it goes.
+    /**
+     * Functions not yet dumped, by entry point. Forwarding stubs are excluded here as everywhere
+     * else -- they are listed separately, and are not code the user opens.
+     */
+    private List<Function> pendingFunctions(FunctionManager fm, Set<String> done) {
+        List<Function> out = new ArrayList<>();
+        for (Function f : fm.getFunctions(true)) {
+            if (!isForwardingStub(f) && !done.contains(addr(f.getEntryPoint()))) {
+                out.add(f);
+            }
+        }
+        return out;
+    }
+
     private void dumpAll(String cacheFile, String progressFile) throws Exception {
         FunctionManager fm = currentProgram.getFunctionManager();
-        int total = 0;
-        for (Function f : fm.getFunctions(true)) {
-            if (isForwardingStub(f)) {
-                continue;
-            }
-            total++;
-        }
+        Set<String> done = new HashSet<>();
+        List<Function> pending = pendingFunctions(fm, done);
+        int total = pending.size();
         writeProgress(progressFile, 0, total);
 
         DecompInterface decomp = new DecompInterface();
@@ -229,41 +246,84 @@ public class BridgeScript extends GhidraScript {
         json.append("{\"functions\":[");
         int i = 0;
         boolean first = true;
+        List<String[]> dumped = new ArrayList<>();
         String regNativesJson = "[]";
+        String earlyRegNatives = "[]";
         try {
             decomp.openProgram(currentProgram);
-            for (Function func : fm.getFunctions(true)) {
-                if (isForwardingStub(func)) {
-                    continue;
-                }
-                String pseudocode = "";
-                try {
-                    DecompileResults res = decomp.decompileFunction(func, 60, new ConsoleTaskMonitor());
-                    if (res != null && res.decompileCompleted() && res.getDecompiledFunction() != null) {
-                        pseudocode = res.getDecompiledFunction().getC();
+            // Read the registration table first: it can define functions Ghidra never found, and
+            // they must exist before the walk below decides what there is to dump.
+            earlyRegNatives = parseRegisterNatives(decomp);
+            pending = pendingFunctions(fm, done);
+            total = pending.size();
+            writeProgress(progressFile, 0, total);
+            // Decompiling can define new functions -- Ghidra creates one at a call target it had
+            // not recognised as code yet. Those appear after the pass that caused them, so a single
+            // walk of the function list misses them, and the pseudocode still names them: the user
+            // clicks a call and the cache has no such function.
+            //
+            // So walk repeatedly, each round taking only what has not been dumped, until a round
+            // turns up nothing new. Rounds are bounded in case a program keeps producing functions.
+            int round = 0;
+            for (; round < MAX_DUMP_ROUNDS && !pending.isEmpty(); round++) {
+                for (Function stale : pending) {
+                    // Re-fetch by address: analysis during an earlier decompile can delete or
+                    // replace a function, leaving the snapshot holding something no longer in the
+                    // program. Asking again is cheap and keeps a vanished entry from throwing.
+                    Address entry = stale.getEntryPoint();
+                    done.add(addr(entry));
+                    Function func = fm.getFunctionAt(entry);
+                    if (func == null || isForwardingStub(func)) {
+                        continue;
                     }
-                } catch (Exception e) {
-                    pseudocode = "// decompilation error: " + e.getMessage();
+                    String pseudocode = "";
+                    try {
+                        DecompileResults res = decomp.decompileFunction(func, 60, new ConsoleTaskMonitor());
+                        if (res != null && res.decompileCompleted() && res.getDecompiledFunction() != null) {
+                            pseudocode = res.getDecompiledFunction().getC();
+                        }
+                    } catch (Exception e) {
+                        pseudocode = "// decompilation error: " + e.getMessage();
+                    }
+                    dumped.add(new String[] {
+                        func.getName(), addr(entry), pseudocode, disassembleBody(func) });
+                    i++;
+                    if (i % 5 == 0) {
+                        writeProgress(progressFile, i, total);
+                    }
                 }
-                String disasm = disassembleBody(func);
-                String callers = callersJson(func);
+                pending = pendingFunctions(fm, done);
+                total = i + pending.size();
+                writeProgress(progressFile, i, total);
+            }
+            if (!pending.isEmpty()) {
+                // Saying nothing here would repeat the very fault this loop exists to fix: a
+                // function the cache cannot answer for, with no record of why.
+                println("BridgeScript: stopped after " + MAX_DUMP_ROUNDS + " passes with "
+                    + pending.size() + " function(s) still undumped");
+            }
+
+            // Callers are collected only now, once the set of functions has settled. Doing it as
+            // each function was dumped would have recorded the callers known at that moment, and a
+            // later pass can add code that calls something dumped earlier -- leaving the earlier
+            // entry short of callers that exist by the time anyone reads it.
+            for (String[] e : dumped) {
+                Function func = fm.getFunctionAt(currentProgram.getAddressFactory()
+                    .getAddress(e[1]));
                 if (!first) {
                     json.append(',');
                 }
                 first = false;
                 json.append('{')
-                    .append("\"name\":").append(jsonString(func.getName())).append(',')
-                    .append("\"address\":").append(jsonString(addr(func.getEntryPoint()))).append(',')
-                    .append("\"pseudocode\":").append(jsonString(pseudocode)).append(',')
-                    .append("\"disassembly\":").append(jsonString(disasm)).append(',')
-                    .append("\"callers\":").append(callers)
+                    .append("\"name\":").append(jsonString(e[0])).append(',')
+                    .append("\"address\":").append(jsonString(e[1])).append(',')
+                    .append("\"pseudocode\":").append(jsonString(e[2])).append(',')
+                    .append("\"disassembly\":").append(jsonString(e[3])).append(',')
+                    .append("\"callers\":").append(func == null ? "[]" : callersJson(func))
                     .append('}');
-                i++;
-                if (i % 5 == 0 || i == total) {
-                    writeProgress(progressFile, i, total);
-                }
             }
-            regNativesJson = parseRegisterNatives(decomp);
+            writeProgress(progressFile, i, total);
+            regNativesJson = earlyRegNatives;
         } finally {
             decomp.dispose();
         }
@@ -718,14 +778,33 @@ public class BridgeScript extends GhidraScript {
         return sb.toString();
     }
 
+    /**
+     * The function a registration entry points at, defining one if Ghidra has not.
+     *
+     * <p>An entry in the table proves its address is an entry point, but Ghidra may never have made
+     * a function there: the only thing referencing the address is a pointer inside a data table, so
+     * flow analysis never reaches it. Naming it {@code FUN_<address>} without defining it produced
+     * something that looked exactly like a name Ghidra had assigned while belonging to no function
+     * at all -- offered by the browser, and unresolvable by every lookup.
+     */
     private String symbolAt(Address fnAddr) {
         Function f = getFunctionAt(fnAddr);
         if (f == null) {
             f = currentProgram.getFunctionManager().getFunctionContaining(fnAddr);
         }
+        if (f == null) {
+            try {
+                f = createFunction(fnAddr, null);
+            } catch (Exception e) {
+                println("BridgeScript: could not define a function at a registration target: "
+                    + e.getMessage());
+            }
+        }
         if (f != null) {
             return f.getName();
         }
+        // Nothing could be made of the address. Still report the entry -- the table said something
+        // is registered here -- and let the lookup fail loudly rather than hide the registration.
         return "FUN_" + fnAddr.toString();
     }
 
