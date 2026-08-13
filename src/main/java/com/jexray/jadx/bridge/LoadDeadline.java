@@ -3,11 +3,11 @@ package com.jexray.jadx.bridge;
 /**
  * How long the client waits on a bridge that has stopped answering.
  *
- * <p>Deliberately not an analysis timeout. Analysis time scales with the binary -- a library with
- * hundreds of thousands of functions can take hours -- so a client-side clock racing the bridge's
- * own only ever cuts healthy work short and reports a timeout that isn't the real problem. The
- * bridge decides when an analysis has genuinely stalled; this only covers the bridge itself going
- * away.
+ * <p>Deliberately not an analysis timeout. Analysis time scales with the binary -- the largest
+ * libraries an APK can carry reach hundreds of thousands of functions and can take hours -- so a
+ * client-side clock racing the bridge's own only ever cuts healthy work short and reports a timeout
+ * that isn't the real problem. The bridge decides when an analysis has genuinely stalled; this only
+ * covers the bridge itself going away.
  *
  * <p>Clock values are passed in rather than read here, so the behaviour is testable without waiting
  * in real time.

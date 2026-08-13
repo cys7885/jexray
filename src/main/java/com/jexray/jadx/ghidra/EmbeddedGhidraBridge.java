@@ -60,8 +60,9 @@ public class EmbeddedGhidraBridge {
     /**
      * Give up on a load only after this long with no sign of life -- no output from Ghidra and no
      * change to the progress file. There is deliberately no overall time limit: analysis time scales
-     * with the binary, and a library with hundreds of thousands of functions can take hours, so any
-     * fixed ceiling we picked would kill healthy work (which is the bug this replaces).
+     * with the binary, and the largest libraries an APK can carry -- a browser engine, an IL2CPP
+     * build -- reach hundreds of thousands of functions and can take hours, so any fixed ceiling we
+     * picked would kill healthy work (which is the bug this replaces).
      *
      * <p><b>This value is a guess.</b> We have no measurement of how long Ghidra can legitimately go
      * quiet during auto-analysis, so it is set high enough to be safe rather than tight. Each load
@@ -1175,7 +1176,7 @@ public class EmbeddedGhidraBridge {
 
         try {
             // Wait for as long as the analysis keeps showing signs of life. Time alone is not a
-            // failure: a large library legitimately runs for an hour. Only silence is.
+            // failure: a large library can legitimately run for an hour. Only silence is.
             while (!p.waitFor(LIVENESS_POLL_MS, TimeUnit.MILLISECONDS)) {
                 long progressAt = progressFile.lastModified(); // the post-script's own heartbeat
                 if (progressAt > lastSignal.get()) {

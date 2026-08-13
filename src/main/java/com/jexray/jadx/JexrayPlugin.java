@@ -80,7 +80,7 @@ public class JexrayPlugin implements JadxPlugin {
 	private static final long LOAD_POLL_MS = 400;
 	/**
 	 * How long to keep waiting when the bridge stops answering status requests. This is not an
-	 * analysis timeout: analysis legitimately runs for an hour on a large library, and the bridge
+	 * analysis timeout: analysis can legitimately run for an hour on a large library, and the bridge
 	 * itself decides when one has stalled. Every status reply refreshes this, so it only fires if
 	 * the bridge has actually gone away.
 	 */

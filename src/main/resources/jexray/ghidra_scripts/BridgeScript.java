@@ -397,7 +397,7 @@ public class BridgeScript extends GhidraScript {
     // One entry per distinct CALLING FUNCTION, not per call instruction: a caller that invokes
     // the target from three call sites is one logical "caller" to a human reading a xref list, and
     // deduping this way keeps the cache bounded by the call graph's edge count rather than its raw
-    // instruction count -- material on a library with hundreds of thousands of functions. The
+    // instruction count -- material at the scale the largest libraries reach. The
     // address kept is the first call site found for that caller; a user who wants every site can
     // still open the caller's own disassembly.
     private String callersJson(Function target) {
