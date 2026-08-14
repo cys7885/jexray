@@ -21,7 +21,8 @@ import javax.swing.Icon;
  * elsewhere, a routine it keeps to itself. Borrowing from the Java set puts an "m" for *method* on a
  * C function, and separates three of these groups by a six-pixel dot.
  *
- * <p>The glyphs are Tabler Icons (MIT, see {@code NOTICE}), drawn on their 24-unit grid at a
+ * <p>The letters and arrows are Tabler Icons (MIT, see {@code NOTICE}); the library page is drawn
+ * here. Both sit on their 24-unit grid at a
  * 2-unit stroke and scaled down here. Icons for a set like this are not worth inventing: what makes
  * one legible at sixteen pixels is stroke discipline and grid alignment worked out across hundreds
  * of glyphs, and a shape improvised for one list reads as improvised next to jadx's own.
@@ -267,8 +268,9 @@ final class SymbolIcon implements Icon {
 	 * The subset of SVG path syntax the bundled glyphs use: moves, lines, horizontal and vertical
 	 * lines, elliptical arcs, and close, in both absolute and relative form.
 	 *
-	 * <p>A parser rather than transcribed geometry so the path strings above can stay byte-identical
-	 * to what the icon project publishes. Anything outside that subset is ignored rather than
+	 * <p>A parser rather than transcribed geometry so the borrowed strings above can stay
+	 * byte-identical to what the icon project publishes (the library page and fold are ours, and
+	 * match nothing there). Anything outside that subset is ignored rather than
 	 * guessed at -- a glyph pasted in from elsewhere that uses curves would come out visibly wrong,
 	 * which is a better failure than a silently distorted one.
 	 */

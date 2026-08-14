@@ -1798,12 +1798,6 @@ public class JexrayPlugin implements JadxPlugin {
 	}
 
 	/**
-	 * What {@code soId} publishes in its dynamic symbol table, read straight from the extracted
-	 * library. Read here rather than taken from the analysis cache because it is a linkage fact
-	 * about the file, not something the decompiler determines. An unreadable library yields an
-	 * empty set, which groups everything defined as internal -- the behaviour before this existed.
-	 */
-	/**
 	 * The names {@code soId} links against but does not define, read from the file itself.
 	 *
 	 * <p>The All Functions browser learns this from the bridge's own listing, which needs the
@@ -1821,6 +1815,12 @@ public class JexrayPlugin implements JadxPlugin {
 		}
 	}
 
+	/**
+	 * What {@code soId} publishes in its dynamic symbol table, read straight from the extracted
+	 * library. Read here rather than taken from the analysis cache because it is a linkage fact
+	 * about the file, not something the decompiler determines. An unreadable library yields an
+	 * empty set, which groups everything defined as internal -- the behaviour before this existed.
+	 */
 	private Set<String> dynamicExportsOf(String soId) {
 		try {
 			ExtractedSo es = getSoManager().extractedForId(soId);

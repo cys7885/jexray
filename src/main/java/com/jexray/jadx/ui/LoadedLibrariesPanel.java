@@ -318,7 +318,6 @@ public class LoadedLibrariesPanel extends JPanel {
 		model.reload();
 	}
 
-	/** Supply the exported function names for one library; shown when it is expanded. */
 	/** Record what {@code soId} links in, publishes, and registers; see {@link #externalsBySoId}. */
 	public void setSymbolFacts(String soId, Set<String> external, Set<String> exported, Set<String> registered) {
 		externalsBySoId.put(soId, external == null ? Set.of() : external);
@@ -326,6 +325,7 @@ public class LoadedLibrariesPanel extends JPanel {
 		registeredBySoId.put(soId, registered == null ? Set.of() : registered);
 	}
 
+	/** Supply the exported function names for one library; shown when it is expanded. */
 	public void setFunctions(String soId, List<String> names) {
 		functionsBySoId.put(soId, names == null ? List.of() : new ArrayList<>(names));
 		for (int i = 0; i < root.getChildCount(); i++) {

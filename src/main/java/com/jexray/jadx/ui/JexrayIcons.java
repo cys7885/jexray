@@ -132,9 +132,13 @@ public final class JexrayIcons {
 	 * <p>Callers put the icon they would rather have first and something jadx is known to ship last.
 	 * Some of those first choices name nothing jadx has ever shipped -- they were guessed, and were
 	 * left in place only because the fallback behind each one is a real icon and {@link #probing}
-	 * now makes a miss cost nothing. Do not read a leading name as evidence the resource exists; the
-	 * set jadx carries has grown from 29 to 41 across the releases this plugin supports, and names
-	 * can leave it as well as join it.
+	 * now makes a miss cost nothing. Do not read a leading name as evidence the resource exists.
+	 *
+	 * <p>Which names a given jadx has is not something this can know: the set is not fixed across
+	 * the releases the plugin runs on (40 at the 1.5.3 floor, 41 by 1.5.6), so a name has to be
+	 * looked up rather than assumed. No name has been withdrawn so far -- every change to that set
+	 * has been an addition -- so the case {@link #probing} actually covers today is the one already
+	 * seen here: a leading candidate no release has ever carried.
 	 */
 	public static ImageIcon loadFirst(IconSource source, String... names) {
 		if (names != null) {
