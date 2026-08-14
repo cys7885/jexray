@@ -1745,8 +1745,15 @@ public class JexrayPlugin implements JadxPlugin {
 			}
 			List<String> finalNames = names;
 			JadxGuiContext gui = context.getGuiContext();
+			// Read locally, off the EDT, alongside the names they classify. Whatever the bridge has
+			// already told us about registrations is folded in; a library it has not analysed simply
+			// contributes none, and groups on the two facts the file itself can answer.
+			Set<String> imported = importedSymbolsOf(soId);
+			Set<String> exported = dynamicExportsOf(soId);
+			Set<String> registered = registeredNamesBySoId.getOrDefault(soId, Set.of());
 			Runnable push = () -> {
 				if (loadedLibrariesDialog != null) {
+					loadedLibrariesDialog.setSymbolFacts(soId, imported, exported, registered);
 					loadedLibrariesDialog.setFunctions(soId, finalNames);
 				}
 			};
@@ -1790,6 +1797,24 @@ public class JexrayPlugin implements JadxPlugin {
 	 * about the file, not something the decompiler determines. An unreadable library yields an
 	 * empty set, which groups everything defined as internal -- the behaviour before this existed.
 	 */
+	/**
+	 * The names {@code soId} links against but does not define, read from the file itself.
+	 *
+	 * <p>The All Functions browser learns this from the bridge's own listing, which needs the
+	 * library analysed first. The Loaded Libraries window shows libraries before any of that has
+	 * happened, so it reads the symbol table directly -- the same fact by a cheaper route, so the
+	 * two windows can group a symbol the same way without one of them waiting on Ghidra.
+	 */
+	private Set<String> importedSymbolsOf(String soId) {
+		try {
+			ExtractedSo es = getSoManager().extractedForId(soId);
+			return es == null ? Set.of() : NativeSymbols.importedSymbols(es.path().toFile());
+		} catch (IOException e) {
+			LOG.warn("Could not read imported symbols for {}", soId, e);
+			return Set.of();
+		}
+	}
+
 	private Set<String> dynamicExportsOf(String soId) {
 		try {
 			ExtractedSo es = getSoManager().extractedForId(soId);

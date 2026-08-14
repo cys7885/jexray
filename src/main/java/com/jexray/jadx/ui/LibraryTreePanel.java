@@ -15,6 +15,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 
+import javax.swing.Icon;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
@@ -228,9 +229,13 @@ public class LibraryTreePanel extends JPanel {
 				Object shown = value;
 				boolean bold = false;
 				boolean dim = false;
+				DefaultMutableTreeNode functionLeaf = null;
+				Icon groupIcon = null;
+				boolean libraryNode = false;
 				String query = filterField.getText();
 				if (value instanceof DefaultMutableTreeNode n) {
 					if (n.getUserObject() instanceof LibraryEntry lib) {
+						libraryNode = true;
 						shown = libraryLabel(lib);
 						dim = !query.isEmpty() && matchStateFor(lib, query) == MatchState.ZERO;
 					} else if (leaf && n.getUserObject() instanceof String name && isFunctionNameLeaf(n)) {
@@ -238,6 +243,13 @@ public class LibraryTreePanel extends JPanel {
 						if (highlighted != null) {
 							shown = highlighted;
 						}
+						functionLeaf = n;
+					} else if (n.getUserObject() instanceof String title) {
+						// A group heading carries the icon of the rows beneath it, so the column
+						// explains itself: whatever a reader sees against "Imports (12)" is what an
+						// import looks like everywhere else. Tested after the leaf case above, so a
+						// function that happens to be named like a heading is still a function.
+						groupIcon = iconForGroup(groupTitle(title));
 					}
 					bold = isMatchingCategoryNode(n, query);
 				}
@@ -255,6 +267,18 @@ public class LibraryTreePanel extends JPanel {
 				// Selected rows keep the selection foreground regardless of dim, matching how a
 				// selection highlight already overrides bold/plain elsewhere in this tree.
 				c.setForeground(sel ? getTextSelectionColor() : dim ? dimForeground() : getTextNonSelectionColor());
+				// Not the same reuse trap as the font and foreground above: the super call sets a
+				// leaf/open/closed icon on every row it renders, so a row this leaves alone still
+				// gets its own icon instead of inheriting the previous row's. Only rows there is an
+				// icon for override it. That rests on super setting one unconditionally -- were this
+				// to stop calling super, it would need an explicit else.
+				if (c instanceof JLabel label) {
+					Icon icon = libraryNode ? SymbolIcon.LIBRARY
+							: functionLeaf != null ? iconForLeaf(functionLeaf) : groupIcon;
+					if (icon != null) {
+						label.setIcon(icon);
+					}
+				}
 				return c;
 			}
 		});
@@ -593,14 +617,11 @@ public class LibraryTreePanel extends JPanel {
 		List<String> exports = new ArrayList<>();
 		List<String> imports = new ArrayList<>();
 		for (String n : names) {
-			if (external.contains(n)) {
-				imports.add(n);
-			} else if (isJniEntryPoint(n) || registered.contains(n)) {
-				jni.add(n);
-			} else if (exported.contains(n)) {
-				exports.add(n);
-			} else {
-				internal.add(n);
+			switch (groupFor(n, external, exported, registered)) {
+				case "Imports" -> imports.add(n);
+				case "JNI methods" -> jni.add(n);
+				case "Exports" -> exports.add(n);
+				default -> internal.add(n);
 			}
 		}
 		// Every group is listed even when it holds nothing. "JNI methods (0)" is an answer -- this
@@ -611,6 +632,55 @@ public class LibraryTreePanel extends JPanel {
 		node.add(group("Exports", exports));
 		node.add(group("Imports", imports));
 		model.nodeStructureChanged(node);
+	}
+
+	/**
+	 * Which of the four groups a symbol belongs to, given what its library publishes, links against,
+	 * and registers.
+	 *
+	 * <p>The single place this is decided. Both trees that show a library's symbols call it, so a
+	 * function cannot land under one heading in one window and another heading in the other -- and,
+	 * since the icon follows the group, cannot carry two different icons either.
+	 *
+	 * <p>Order matters. A name linked in from elsewhere is an import whatever else it looks like; an
+	 * entry point is one by membership of the registration table, not by spelling, because a library
+	 * that hides its entry points registers them under names like {@code FUN_...}; and what is left
+	 * is an export only if the library actually publishes it.
+	 */
+	static String groupFor(String name, Set<String> external, Set<String> exported, Set<String> registered) {
+		if (external.contains(name)) {
+			return "Imports";
+		}
+		if (isJniEntryPoint(name) || registered.contains(name)) {
+			return "JNI methods";
+		}
+		return exported.contains(name) ? "Exports" : "Functions";
+	}
+
+	/** The icon for a group title, so a caller that already knows the group need not build a node. */
+	static Icon iconForGroup(String group) {
+		return switch (group) {
+			case "JNI methods" -> SymbolIcon.JNI;
+			case "Functions" -> SymbolIcon.INTERNAL;
+			case "Exports" -> SymbolIcon.EXPORT;
+			case "Imports" -> SymbolIcon.IMPORT;
+			default -> null;
+		};
+	}
+
+	/**
+	 * The icon for a function leaf, chosen by the group holding it; null for anything else.
+	 *
+	 * <p>Drawn rather than borrowed from jadx -- see {@link SymbolIcon} for why the Java symbol set
+	 * cannot say what these groups distinguish. The icons are stateless constants, so this costs
+	 * nothing to call from the renderer, which runs for every visible row on every repaint.
+	 */
+	static Icon iconForLeaf(DefaultMutableTreeNode leaf) {
+		if (!(leaf.getParent() instanceof DefaultMutableTreeNode p)
+				|| !(p.getUserObject() instanceof String label)) {
+			return null;
+		}
+		return iconForGroup(groupTitle(label));
 	}
 
 	private static String placeholderFor(LibraryEntry lib) {
@@ -793,7 +863,7 @@ public class LibraryTreePanel extends JPanel {
 	}
 
 	/** "Imports (5)" -> "Imports": the stable part of a group label, without its match count. */
-	private static String groupTitle(String label) {
+	static String groupTitle(String label) {
 		int p = label.lastIndexOf(" (");
 		return p < 0 ? label : label.substring(0, p);
 	}

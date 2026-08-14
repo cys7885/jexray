@@ -7,6 +7,9 @@ import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -76,6 +79,17 @@ public class LoadedLibrariesPanel extends JPanel {
 	// already cached in functionsBySoId. Null in callers/tests that don't offer it -- such a
 	// library simply can't contribute to the total, same as one that isn't in the APK.
 	private final FunctionReader functionReader;
+
+	/**
+	 * Per library, the same three facts the All Functions browser groups by. Held here so this tree
+	 * can call {@link LibraryTreePanel#groupFor} rather than deciding for itself: a symbol that is an
+	 * import over there has to be an import here too, or the two windows disagree about the same
+	 * function and their icons disagree with it. A library with nothing recorded still groups, just
+	 * with less to go on.
+	 */
+	private final Map<String, Set<String>> externalsBySoId = new LinkedHashMap<>();
+	private final Map<String, Set<String>> exportsBySoId = new LinkedHashMap<>();
+	private final Map<String, Set<String>> registeredBySoId = new LinkedHashMap<>();
 
 	private final DefaultMutableTreeNode root = new DefaultMutableTreeNode("loaded libraries");
 	private final DefaultTreeModel model = new DefaultTreeModel(root);
@@ -159,12 +173,17 @@ public class LoadedLibrariesPanel extends JPanel {
 					boolean expanded, boolean leaf, int row, boolean focus) {
 				Object shown = value;
 				boolean bold = false;
+				javax.swing.Icon icon = null;
 				if (value instanceof DefaultMutableTreeNode n) {
 					String label = labelFor(n.getUserObject());
+					if (n.getUserObject() instanceof ResolvedLibrary) {
+						icon = SymbolIcon.LIBRARY;
+					}
 					if (label != null) {
 						shown = label;
 					} else if (leaf && n.getUserObject() instanceof String name
 							&& LibraryTreePanel.isFunctionNameLeaf(n)) {
+						icon = LibraryTreePanel.iconForLeaf(n);
 						// same matched-span highlight LibraryTreePanel uses for its function leaves
 						// (see LibraryTreePanel.highlightMatch); reused rather than duplicated, the
 						// same way isJniEntryPoint already is below in rebuildFunctionChildren
@@ -172,6 +191,10 @@ public class LoadedLibrariesPanel extends JPanel {
 						if (highlighted != null) {
 							shown = highlighted;
 						}
+					}
+					if (icon == null && n.getUserObject() instanceof String title) {
+						// the heading takes the icon of its rows, as in the All Functions browser
+						icon = LibraryTreePanel.iconForGroup(LibraryTreePanel.groupTitle(title));
 					}
 					bold = isMatchingCategoryNode(n);
 				}
@@ -184,6 +207,11 @@ public class LoadedLibrariesPanel extends JPanel {
 				// its deriveFont(style) silently ignores the requested style and returns another
 				// plain live font -- so the style change never actually takes effect.
 				c.setFont(new Font(c.getFont().getName(), bold ? Font.BOLD : Font.PLAIN, c.getFont().getSize()));
+				// Unlike the font above there is no stale-icon trap: the super call sets a
+				// leaf/open/closed icon on every row, so only the rows with one of ours override it.
+				if (icon != null && c instanceof JLabel label) {
+					label.setIcon(icon);
+				}
 				return c;
 			}
 		});
@@ -291,6 +319,13 @@ public class LoadedLibrariesPanel extends JPanel {
 	}
 
 	/** Supply the exported function names for one library; shown when it is expanded. */
+	/** Record what {@code soId} links in, publishes, and registers; see {@link #externalsBySoId}. */
+	public void setSymbolFacts(String soId, Set<String> external, Set<String> exported, Set<String> registered) {
+		externalsBySoId.put(soId, external == null ? Set.of() : external);
+		exportsBySoId.put(soId, exported == null ? Set.of() : exported);
+		registeredBySoId.put(soId, registered == null ? Set.of() : registered);
+	}
+
 	public void setFunctions(String soId, List<String> names) {
 		functionsBySoId.put(soId, names == null ? List.of() : new ArrayList<>(names));
 		for (int i = 0; i < root.getChildCount(); i++) {
@@ -568,16 +603,22 @@ public class LoadedLibrariesPanel extends JPanel {
 			model.insertNodeInto(new DefaultMutableTreeNode("(no matching functions)"), node, node.getChildCount());
 			return;
 		}
-		List<String> jni = new ArrayList<>();
-		List<String> other = new ArrayList<>();
+		// Grouped by the same rule the All Functions browser uses, so the two windows never put the
+		// same function under different headings -- see LibraryTreePanel.groupFor.
+		Set<String> external = externalsBySoId.getOrDefault(lib.soId(), Set.of());
+		Set<String> exported = exportsBySoId.getOrDefault(lib.soId(), Set.of());
+		Set<String> registered = registeredBySoId.getOrDefault(lib.soId(), Set.of());
+		Map<String, List<String>> byGroup = new LinkedHashMap<>();
+		for (String title : new String[] { "JNI methods", "Functions", "Exports", "Imports" }) {
+			byGroup.put(title, new ArrayList<>());
+		}
 		for (String n : shown) {
-			(LibraryTreePanel.isJniEntryPoint(n) ? jni : other).add(n);
+			byGroup.get(LibraryTreePanel.groupFor(n, external, exported, registered)).add(n);
 		}
-		if (!jni.isEmpty()) {
-			model.insertNodeInto(group("JNI methods", jni), node, node.getChildCount());
-		}
-		if (!other.isEmpty()) {
-			model.insertNodeInto(group("Functions", other), node, node.getChildCount());
+		for (Map.Entry<String, List<String>> e : byGroup.entrySet()) {
+			if (!e.getValue().isEmpty()) {
+				model.insertNodeInto(group(e.getKey(), e.getValue()), node, node.getChildCount());
+			}
 		}
 	}
 

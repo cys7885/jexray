@@ -21,6 +21,18 @@ following third-party libraries:
     Relocated to com.jexray.shaded.gson.
     https://github.com/google/gson
 
+The plugin's function-list icons are drawn from path data taken from:
+
+  Tabler Icons (outline set)
+    Copyright (c) 2020-2026 Paweł Kuna
+    Licensed under the MIT License.
+    No files from the project are bundled. The path data for six glyphs
+    (letter-f, letter-j, letter-s, letter-o, arrow-narrow-right,
+    arrow-narrow-left) is embedded in com.jexray.jadx.ui.SymbolIcon and
+    painted with Java2D. The page outline and fold the library icon is built
+    from are not theirs.
+    https://github.com/tabler/tabler-icons
+
 The following libraries are NOT bundled. They are supplied by the host
 application at runtime and are listed only to record the dependency:
 

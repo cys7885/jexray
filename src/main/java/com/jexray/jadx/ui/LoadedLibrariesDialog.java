@@ -105,6 +105,13 @@ public class LoadedLibrariesDialog extends JDialog {
 		panel.setScanning();
 	}
 
+	/** Record what a library links in, publishes, and registers; see
+	 * {@link LoadedLibrariesPanel#setSymbolFacts}. */
+	public void setSymbolFacts(String soId, java.util.Set<String> external, java.util.Set<String> exported,
+			java.util.Set<String> registered) {
+		panel.setSymbolFacts(soId, external, exported, registered);
+	}
+
 	/** Supply the exported function names for one library; shown when it is expanded. */
 	public void setFunctions(String soId, List<String> names) {
 		panel.setFunctions(soId, names);
