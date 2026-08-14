@@ -48,10 +48,9 @@ import com.jexray.jadx.LoadLibraryDetector.LoadLibraryCall;
  * {@link LoadLibraryCall#rawArg}, a wrong guess here would be worse than reporting no guess at all.
  *
  * <p>One narrow exception is worth the extra risk: a non-final static field assigned a single
- * string literal and read back right before the load call -- common when the literal is set well
- * ahead of the load with logging or StringBuilder work in between, which defeats the
- * one-instruction lookahead above and used to report the call as
- * unresolved even though the name is, in fact, statically known. This is handled with a class-wide
+ * string literal and read back right before the load call. The literal can be set arbitrarily far
+ * ahead of the load, which puts it out of reach of the one-instruction lookahead above even though
+ * the name is, in fact, statically known. This is handled with a class-wide
  * two-pass scan: {@link #collectFieldLiterals} first walks every method of a class recording, per
  * static field, the literal from any {@code const-string; sput} pair that targets it; {@link
  * #scanClass} then re-walks every method treating an {@code sget} of a field found in that map as

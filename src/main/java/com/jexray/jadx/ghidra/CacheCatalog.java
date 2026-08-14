@@ -25,8 +25,9 @@ import com.google.gson.JsonParser;
  *       {@code .progress.json} / {@code .gpr} / {@code .rep} suffixes.
  *       Left over from before this change. Deliberately never read by the bridge: nothing on
  *       disk proves which binary produced a legacy entry (the .so bytes that made it were never
- *       kept, only Ghidra's dump of them), so silently adopting one risks showing the wrong
- *       library's pseudocode -- the exact bug content-hash keying exists to fix.</li>
+ *       kept, only Ghidra's dump of them), and one file name can stand for more than one binary,
+ *       so adopting an entry on the strength of its name alone could answer with another
+ *       library's pseudocode. Keying by content hash is what makes that unrepresentable.</li>
  * </ul>
  *
  * <p>{@code index.json} maps an active entry's hash back to the human-readable id it was last

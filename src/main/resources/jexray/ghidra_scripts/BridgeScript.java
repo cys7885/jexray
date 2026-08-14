@@ -468,9 +468,9 @@ public class BridgeScript extends GhidraScript {
         parseRegisterNativesViaCallGraph(decomp, ptrSize, entries);
 
         // Path 2 (data-driven): scan initialized data for JNINativeMethod-shaped triples
-        // {name*, signature*, fnPtr}. This does NOT depend on recovering the registration call at
-        // all, so it still works when the call is obfuscated, uses an unrecovered slot offset, or
-        // lives in a function not reachable from JNI_OnLoad (e.g. an init the app calls from Java).
+        // {name*, signature*, fnPtr}. Path 1 assumes the registration call can be recovered and
+        // reached from JNI_OnLoad; nothing in the JNI contract requires either, so this path covers
+        // the inputs where that assumption does not hold, without depending on the call at all.
         scanJniMethodTables(ptrSize, entries);
 
         StringBuilder out = new StringBuilder("[");

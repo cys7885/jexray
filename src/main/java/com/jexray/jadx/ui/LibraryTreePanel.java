@@ -636,9 +636,10 @@ public class LibraryTreePanel extends JPanel implements SidebarPanel {
 		// the published surface; otherwise the two groups would overlap.
 		//
 		// "JNI method" is membership, not spelling: a function registered through RegisterNatives is
-		// an entry point whatever it is called, and an app that hides its entry points chooses
-		// exactly that route. Grouping it by the registration table rather than by name is the whole
-		// point -- otherwise it sits anonymously among thousands of others.
+		// an entry point whatever it is called, and the registration table is the only thing that
+		// says so. Grouping by that table rather than by name is the whole point -- a name carries
+		// no guarantee, so a table entry named like anything else would sit anonymously among
+		// thousands of others.
 		Set<String> external = externalsBySoId.getOrDefault(lib.soId(), Set.of());
 		Set<String> exported = exportsBySoId.getOrDefault(lib.soId(), Set.of());
 		Set<String> registered = registeredBySoId.getOrDefault(lib.soId(), Set.of());
@@ -673,9 +674,9 @@ public class LibraryTreePanel extends JPanel implements SidebarPanel {
 	 * since the icon follows the group, cannot carry two different icons either.
 	 *
 	 * <p>Order matters. A name linked in from elsewhere is an import whatever else it looks like; an
-	 * entry point is one by membership of the registration table, not by spelling, because a library
-	 * that hides its entry points registers them under names like {@code FUN_...}; and what is left
-	 * is an export only if the library actually publishes it.
+	 * entry point is one by membership of the registration table, not by spelling, because
+	 * registration puts no constraint at all on the name -- a stripped binary leaves entry points
+	 * named like {@code FUN_...}; and what is left is an export only if the library publishes it.
 	 */
 	static String groupFor(String name, Set<String> external, Set<String> exported, Set<String> registered) {
 		if (external.contains(name)) {
