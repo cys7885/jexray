@@ -58,6 +58,7 @@ import com.jexray.jadx.nav.SyncDebouncer;
 import com.jexray.jadx.symbols.NativeSymbols;
 import com.jexray.jadx.ui.CacheDialog;
 import com.jexray.jadx.ui.FunctionListDialog;
+import com.jexray.jadx.ui.JexrayIcons;
 import com.jexray.jadx.ui.LibraryEntry;
 import com.jexray.jadx.ui.LoadedLibrariesDialog;
 import com.jexray.jadx.ui.NativeFunctionView;
@@ -1108,8 +1109,13 @@ public class JexrayPlugin implements JadxPlugin {
 					this::showXrefs,
 					// Loaded Libraries: which .so's the app asks the VM to load (Native-View-only)
 					this::showLoadedLibraries,
-					// jadx's own SVG icons (null under CLI / when unavailable -> text-only buttons)
-					gui == null ? null : gui::getSVGIcon);
+					// jadx's own SVG icons (null under CLI / when unavailable -> text-only buttons).
+					// Routed through a source that checks jadx's resources before asking, so a
+					// candidate name this jadx does not ship is skipped rather than reported as an
+					// error -- see JexrayIcons.probing. The loader comes from the GUI context object
+					// because that is a jadx-gui class, and the icons live beside it.
+					gui == null ? null
+							: JexrayIcons.probing(gui::getSVGIcon, gui.getClass().getClassLoader()));
 			// Change: populate the toolbar version label the moment the dialog exists, not only
 			// after the first successful decompile (previously the only caller of setVersionInfo
 			// was fetchAndShow's maybeWarnGhidraVersion). The Ghidra version may still be null

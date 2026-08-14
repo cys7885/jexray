@@ -36,7 +36,52 @@ public final class JexrayIcons {
 		ImageIcon get(String name);
 	}
 
+	/** A name jadx has carried for as long as it has had this icon set, used to test the probe. */
+	private static final String KNOWN_PRESENT = "ui/left";
+
+	/** Where jadx keeps the icon this set names; see {@link #probing}. */
+	private static final String RESOURCE_FORMAT = "icons/%s.svg";
+
 	private JexrayIcons() {
+	}
+
+	/**
+	 * Wrap an icon source so a name jadx does not have is never asked for.
+	 *
+	 * <p>{@link #loadFirst} works by trying candidates in turn, which assumes asking for a name that
+	 * is not there is cheap. It is not: jadx logs the miss at ERROR with a stack trace before
+	 * substituting its placeholder, so every probe of a name a given jadx release happens not to
+	 * ship writes an exception into the user's log for an icon the plugin then quietly does without.
+	 * Nothing is broken by it, which is exactly what makes it worth removing -- an ERROR that means
+	 * nothing teaches the reader to skim past ones that do.
+	 *
+	 * <p>Looking the resource up first turns the miss into a lookup that costs nothing and says
+	 * nothing. {@code loader} must be the one that loaded jadx's GUI, since that is where the icons
+	 * live; the plugin's own loader would find none of them.
+	 *
+	 * <p>Fails open. If the probe cannot find even {@link #KNOWN_PRESENT} the assumption behind it is
+	 * wrong for this jadx -- a different resource root, a loader that hides them -- and every name
+	 * would be skipped, costing every icon the plugin has. In that case the probe disables itself and
+	 * calls through exactly as before, noise and all, because a noisy toolbar with icons beats a
+	 * silent one without.
+	 */
+	public static IconSource probing(IconSource raw, ClassLoader loader) {
+		if (raw == null) {
+			return null;
+		}
+		if (loader == null || !hasResource(loader, KNOWN_PRESENT)) {
+			LOG.debug("Jexray: cannot see jadx's icon resources; requesting names without checking first");
+			return raw;
+		}
+		return name -> name != null && !hasResource(loader, name) ? null : raw.get(name);
+	}
+
+	private static boolean hasResource(ClassLoader loader, String name) {
+		try {
+			return loader.getResource(String.format(RESOURCE_FORMAT, name)) != null;
+		} catch (RuntimeException e) {
+			return false;
+		}
 	}
 
 	/**
@@ -81,7 +126,16 @@ public final class JexrayIcons {
 		}
 	}
 
-	/** First resolvable icon among {@code names}, or {@code null} if none resolve. */
+	/**
+	 * First resolvable icon among {@code names}, or {@code null} if none resolve.
+	 *
+	 * <p>Callers put the icon they would rather have first and something jadx is known to ship last.
+	 * Some of those first choices name nothing jadx has ever shipped -- they were guessed, and were
+	 * left in place only because the fallback behind each one is a real icon and {@link #probing}
+	 * now makes a miss cost nothing. Do not read a leading name as evidence the resource exists; the
+	 * set jadx carries has grown from 29 to 41 across the releases this plugin supports, and names
+	 * can leave it as well as join it.
+	 */
 	public static ImageIcon loadFirst(IconSource source, String... names) {
 		if (names != null) {
 			for (String n : names) {
