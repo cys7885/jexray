@@ -3,6 +3,7 @@ package com.jexray.jadx.ui;
 import java.awt.AWTEvent;
 import java.awt.BasicStroke;
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Cursor;
 import java.awt.Dimension;
@@ -33,13 +34,16 @@ import javax.swing.JMenuItem;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.JProgressBar;
+import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
+import javax.swing.JToggleButton;
 import javax.swing.JToolBar;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.UIManager;
 import javax.swing.border.EmptyBorder;
 import javax.swing.plaf.LayerUI;
+import javax.swing.plaf.basic.BasicSplitPaneUI;
 
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.fife.ui.rsyntaxtextarea.SyntaxConstants;
@@ -119,6 +123,37 @@ public class NativeViewDialog extends JDialog {
 	private int codeFontSize;
 	private final JTabbedPane codeTabs;
 
+	/**
+	 * The symbol lists, and the divider between them and the code.
+	 *
+	 * <p>Stacked in a card layout rather than a tabbed pane: the toolbar toggles already name both
+	 * lists and show which is in front, so a tab strip would repeat that pair of labels directly
+	 * beneath itself, and spend a row of the sidebar's height to do it -- height the tree, which is
+	 * the only part that grows with the library, has to give up.
+	 */
+	private final JPanel sidebarCards;
+	private final CardLayout sidebarLayout;
+	/** The panels behind the cards, indexed by tab, so the front one can be asked for its filter. */
+	private final SidebarPanel[] sidebarPanels = new SidebarPanel[2];
+	private int sidebarTab;
+	private final JSplitPane split;
+	/** Width to restore the sidebar to; kept while it is collapsed, when the divider cannot say. */
+	private int sidebarWidth;
+	private boolean sidebarVisible;
+	/** The divider's thickness before collapsing zeroes it, captured once -- see the constructor. */
+	private final int dividerSize;
+	/**
+	 * Whether the user has hold of the divider.
+	 *
+	 * <p>The divider moves for reasons that are not a drag: narrowing the window pushes it left once
+	 * the code side reaches its minimum. Those arrive through the same property listener, and they
+	 * arrive a layout pass later than the resize that caused them, so a flag set around this class's
+	 * own calls is already back to false by the time they land -- the moved-by-layout width would be
+	 * saved as if it had been chosen. A press on the divider itself is the one signal that means the
+	 * user, and only the user.
+	 */
+	private boolean draggingDivider;
+
 	// true while the code area shows the one-time "Analyzing…" placeholder and nothing
 	// else (a real function / error / loading state) has taken it over since.
 	private boolean progressActive;
@@ -168,7 +203,8 @@ public class NativeViewDialog extends JDialog {
 	// "Loaded Libraries": which .so's the app asks the VM to load, from the Native View toolbar
 	// (this is scoped to Native View only -- no global jadx menu item).
 	private final Runnable onShowLoadedLibraries;
-	private final JButton loadedLibrariesButton;
+	private final JToggleButton loadedLibrariesButton;
+	private final JToggleButton allFunctionsButton;
 
 	// last version info pushed via setVersionInfo, and the current error context (when in the
 	// error state) -- so the "Report this error" button can seed an accurate report.
@@ -321,20 +357,27 @@ public class NativeViewDialog extends JDialog {
 			}
 		});
 
-		JButton allFunctionsButton = new JButton("☰ All Functions");
+		// Both lists live in the sidebar now, so these say which one is showing rather than opening
+		// a window. Toggles, not buttons: the pressed look is the only thing telling the user which
+		// panel is in front once the sidebar is open.
+		allFunctionsButton = new JToggleButton("☰ All Functions");
 		allFunctionsButton.setToolTipText("Browse every function in the loaded native library");
 		allFunctionsButton.addActionListener(e -> {
-			if (onListFunctions != null) {
+			toggleSidebarTab(UiPrefs.TAB_ALL_FUNCTIONS);
+			// The caller loads the list; ask only when the panel is actually coming into view, so
+			// closing it does not kick off work whose result nobody is looking at.
+			if (isSidebarVisible() && onListFunctions != null) {
 				onListFunctions.run();
 			}
 		});
 		applyIcon(allFunctionsButton, JexrayIcons.loadFirst(iconSource, "ui/find", "ui/usagesFinder"), "All Functions");
 
-		loadedLibrariesButton = new JButton("Loaded Libraries");
+		loadedLibrariesButton = new JToggleButton("Loaded Libraries");
 		loadedLibrariesButton.setToolTipText(
 				"Which .so files this app asks the VM to load, and their exported functions");
 		loadedLibrariesButton.addActionListener(e -> {
-			if (onShowLoadedLibraries != null) {
+			toggleSidebarTab(UiPrefs.TAB_LOADED_LIBRARIES);
+			if (isSidebarVisible() && onShowLoadedLibraries != null) {
 				onShowLoadedLibraries.run();
 			}
 		});
@@ -445,9 +488,34 @@ public class NativeViewDialog extends JDialog {
 		statusBar.setBorder(javax.swing.BorderFactory.createMatteBorder(1, 0, 0, 0,
 				statusBarDefaultBg.darker()));
 
+		// The symbol lists live beside the code rather than in windows of their own: picking a
+		// function and reading it are one task, and a separate window turns every pick into a
+		// window switch. The panels themselves are built by the caller (they need its callbacks)
+		// and handed over via setSidebarPanels; this only owns where they sit.
+		sidebarLayout = new CardLayout();
+		sidebarCards = new JPanel(sidebarLayout);
+		// Let the split refuse a too-narrow sidebar rather than accepting the drag and then
+		// declining to remember it, which reads as the width silently snapping back.
+		sidebarCards.setMinimumSize(new Dimension(UiPrefs.MIN_SIDEBAR_WIDTH, 0));
+		sidebarTab = uiPrefs.loadSidebarTab();
+		split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sidebarCards, codeWrap);
+		split.setContinuousLayout(true);
+		split.setBorder(null);
+		// The code side takes new space when the window grows; the list wants the width it was
+		// given and no more.
+		split.setResizeWeight(0);
+		// Ask now, while the divider still has its natural thickness: collapsing sets it to 0, and
+		// the look-and-feel cannot be asked for it again -- UIManager answers 0 for a key it has
+		// never defined, which would leave a restored sidebar with no grabbable divider.
+		dividerSize = split.getDividerSize();
+		sidebarWidth = uiPrefs.loadSidebarWidth();
+		sidebarVisible = uiPrefs.loadSidebarVisible();
+		split.addPropertyChangeListener(JSplitPane.DIVIDER_LOCATION_PROPERTY, e -> rememberDividerDrag());
+		trackDividerDrags();
+
 		JPanel content = new JPanel(new BorderLayout());
 		content.add(north, BorderLayout.NORTH);
-		content.add(codeWrap, BorderLayout.CENTER);
+		content.add(split, BorderLayout.CENTER);
 		content.add(statusBar, BorderLayout.SOUTH);
 
 		setContentPane(content);
@@ -456,7 +524,7 @@ public class NativeViewDialog extends JDialog {
 		installXrefsShortcut();
 		installSideButtonNav(pseudoArea, disasmArea, tabs, content, headerLabel);
 		// wide enough that the toolbar fits without the trailing buttons being clipped to "..."
-		setPreferredSize(new Dimension(1000, 660));
+		setPreferredSize(new Dimension(1280, 720));
 		pack();
 		if (parent != null) {
 			setLocationRelativeTo(parent);
@@ -617,6 +685,176 @@ public class NativeViewDialog extends JDialog {
 			goBack();
 		} else if (button == MOUSE_FORWARD_BUTTON) {
 			goForward();
+		}
+	}
+
+	// ------------------------------------------------------------------- sidebar
+
+	/**
+	 * Put the two symbol lists in the sidebar. Call once, before the window is shown.
+	 *
+	 * <p>The panels are built by the caller because they need callbacks only it can supply -- what to
+	 * open, which library to load, how to count filter matches. This window decides where they sit
+	 * and when they are visible, and nothing else about them.
+	 */
+	public void setSidebarPanels(SidebarPanel allFunctions, SidebarPanel loadedLibraries) {
+		sidebarPanels[UiPrefs.TAB_ALL_FUNCTIONS] = allFunctions;
+		sidebarPanels[UiPrefs.TAB_LOADED_LIBRARIES] = loadedLibraries;
+		sidebarCards.removeAll();
+		sidebarCards.add(allFunctions.asComponent(), cardName(UiPrefs.TAB_ALL_FUNCTIONS));
+		sidebarCards.add(loadedLibraries.asComponent(), cardName(UiPrefs.TAB_LOADED_LIBRARIES));
+		sidebarLayout.show(sidebarCards, cardName(sidebarTab));
+		applySidebarVisible(sidebarVisible);
+		syncSidebarButtons();
+	}
+
+	private static String cardName(int index) {
+		return "sidebar-" + index;
+	}
+
+	/**
+	 * Bring a tab to the front, opening the sidebar if it was collapsed, and put the caret in that
+	 * panel's filter.
+	 *
+	 * <p>Focusing the filter is what the two windows this sidebar replaced did when they opened, and
+	 * without it the panel is reachable only with the mouse: the click that opened the sidebar
+	 * leaves focus on the toolbar button, and the find shortcut is bound to the focused subtree, so
+	 * from there it answers for the code search instead. Deferred because the panel has only just
+	 * been made visible, and a focus request is refused by a component that is not showing yet.
+	 */
+	public void showSidebarTab(int index) {
+		showSidebarTabIfOpen(index);
+		if (!sidebarVisible) {
+			setSidebarVisible(true);
+		}
+		SidebarPanel panel = panelFor(sidebarTab);
+		if (panel != null) {
+			SwingUtilities.invokeLater(panel::focusFilter);
+		}
+	}
+
+	/**
+	 * Bring a tab to the front, but leave a collapsed sidebar collapsed.
+	 *
+	 * <p>For results that arrive on their own schedule: a list is fetched off the EDT, and by the
+	 * time it lands the user may have closed the sidebar or moved to the other panel. Opening it for
+	 * them undoes a choice they made after asking for the data, which reads as the window fighting
+	 * back. Nothing is lost by staying shut -- the panel already holds the results, so reopening it
+	 * shows them.
+	 */
+	public void showSidebarTabIfOpen(int index) {
+		if (index != UiPrefs.TAB_ALL_FUNCTIONS && index != UiPrefs.TAB_LOADED_LIBRARIES) {
+			return;
+		}
+		sidebarTab = index;
+		sidebarLayout.show(sidebarCards, cardName(index));
+		uiPrefs.saveSidebarTab(index);
+		syncSidebarButtons();
+	}
+
+	private SidebarPanel panelFor(int index) {
+		return index >= 0 && index < sidebarPanels.length ? sidebarPanels[index] : null;
+	}
+
+	/**
+	 * What a toolbar button does: bring its tab up, or collapse the sidebar if that tab is already
+	 * the one showing. Pressing the button that is already "on" is how a user closes a panel, and
+	 * making it a no-op leaves them hunting for the way back.
+	 */
+	public void toggleSidebarTab(int index) {
+		if (sidebarVisible && sidebarTab == index) {
+			setSidebarVisible(false);
+		} else {
+			showSidebarTab(index);
+		}
+	}
+
+	public boolean isSidebarVisible() {
+		return sidebarVisible;
+	}
+
+	private void setSidebarVisible(boolean visible) {
+		if (sidebarVisible == visible) {
+			return;
+		}
+		if (!visible) {
+			// remember where the user left it before the divider forgets, through the same bounds a
+			// drag goes through -- otherwise collapsing is a way to store a width dragging refuses
+			int at = split.getDividerLocation();
+			if (at >= UiPrefs.MIN_SIDEBAR_WIDTH && at <= UiPrefs.MAX_SIDEBAR_WIDTH) {
+				sidebarWidth = at;
+			}
+		}
+		sidebarVisible = visible;
+		uiPrefs.saveSidebarVisible(visible);
+		applySidebarVisible(visible);
+		syncSidebarButtons();
+	}
+
+	private void applySidebarVisible(boolean visible) {
+		sidebarCards.setVisible(visible);
+		// A hidden component still leaves the divider behind, so the split has to be told to
+		// give the code side everything; setting the location alone leaves a draggable stub.
+		split.setDividerSize(visible ? dividerSize : 0);
+		if (visible) {
+			split.setDividerLocation(sidebarWidth);
+		}
+		split.revalidate();
+		split.repaint();
+	}
+
+	/**
+	 * Make the two toolbar toggles agree with what the sidebar is actually showing.
+	 *
+	 * <p>The sidebar can change without either toggle being clicked: a panel opened from elsewhere
+	 * calls {@link #showSidebarTab}. A toggle left pressed for a panel that is no longer in front is
+	 * worse than no indicator at all, so both are set from what the sidebar is actually showing
+	 * rather than from whichever was clicked last.
+	 */
+	private void syncSidebarButtons() {
+		int shown = sidebarVisible ? sidebarTab : -1;
+		allFunctionsButton.setSelected(shown == UiPrefs.TAB_ALL_FUNCTIONS);
+		loadedLibrariesButton.setSelected(shown == UiPrefs.TAB_LOADED_LIBRARIES);
+	}
+
+	/**
+	 * Watch the divider itself, so a drag can be told apart from every other reason it moves.
+	 *
+	 * <p>Nothing is stored until the button comes back up. With continuous layout the split reports
+	 * a new location for every pixel of a drag, and the width lives in a properties file shared with
+	 * the font size, so saving on each one would put a read, a truncate and a rewrite of that file
+	 * on the event thread hundreds of times for one drag of the mouse.
+	 */
+	private void trackDividerDrags() {
+		if (!(split.getUI() instanceof BasicSplitPaneUI ui)) {
+			// An exotic look-and-feel: the width still follows the divider for this session, it just
+			// is not carried to the next one. Better than guessing which moves were the user's.
+			return;
+		}
+		ui.getDivider().addMouseListener(new MouseAdapter() {
+			@Override
+			public void mousePressed(MouseEvent e) {
+				draggingDivider = true;
+			}
+
+			@Override
+			public void mouseReleased(MouseEvent e) {
+				draggingDivider = false;
+				if (sidebarVisible) {
+					uiPrefs.saveSidebarWidth(sidebarWidth);
+				}
+			}
+		});
+	}
+
+	/** Follow a divider the user has hold of; every other move of it means something else. */
+	private void rememberDividerDrag() {
+		if (!draggingDivider || !sidebarVisible) {
+			return;
+		}
+		int at = split.getDividerLocation();
+		if (at >= UiPrefs.MIN_SIDEBAR_WIDTH && at <= UiPrefs.MAX_SIDEBAR_WIDTH) {
+			sidebarWidth = at;
 		}
 	}
 
@@ -1305,7 +1543,7 @@ public class NativeViewDialog extends JDialog {
 			String g = (ghidraVersion == null || ghidraVersion.isEmpty()) ? "Ghidra ?" : "Ghidra " + ghidraVersion;
 			versionLabel.setText("Jexray " + pluginVersion + "  ·  " + g + (warn ? "  ⚠" : ""));
 			versionLabel.setEnabled(true);
-			versionLabel.setForeground(warn ? java.awt.Color.RED : javax.swing.UIManager.getColor("Label.foreground"));
+			versionLabel.setForeground(warn ? java.awt.Color.RED : UIManager.getColor("Label.foreground"));
 			versionLabel.setToolTipText(warn ? warnText : null);
 		});
 	}

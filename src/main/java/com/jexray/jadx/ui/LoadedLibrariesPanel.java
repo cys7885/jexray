@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.List;
 import java.util.function.Consumer;
 
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
@@ -41,7 +42,7 @@ import com.jexray.jadx.nav.FunctionFilter;
 import com.jexray.jadx.util.HumanFormat;
 
 /**
- * Tree for the "Loaded Libraries" window: which native libraries the app asks the VM to load
+ * Tree for the "Loaded Libraries" side panel: which native libraries the app asks the VM to load
  * (via {@code System.loadLibrary}/{@code load}), what each resolves to in the APK, and its
  * exported functions -- alongside the two things detection can never fully account for, shown
  * with equal visibility rather than folded away:
@@ -57,7 +58,7 @@ import com.jexray.jadx.util.HumanFormat;
  * {@link LibraryTreePanel}: a library can export thousands of symbols and there's no reason to
  * build nodes for one the user never opens.
  */
-public class LoadedLibrariesPanel extends JPanel {
+public class LoadedLibrariesPanel extends JPanel implements SidebarPanel {
 
 	private static final long serialVersionUID = 1L;
 
@@ -83,7 +84,7 @@ public class LoadedLibrariesPanel extends JPanel {
 	/**
 	 * Per library, the same three facts the All Functions browser groups by. Held here so this tree
 	 * can call {@link LibraryTreePanel#groupFor} rather than deciding for itself: a symbol that is an
-	 * import over there has to be an import here too, or the two windows disagree about the same
+	 * import over there has to be an import here too, or the two panels disagree about the same
 	 * function and their icons disagree with it. A library with nothing recorded still groups, just
 	 * with less to go on.
 	 */
@@ -252,7 +253,7 @@ public class LoadedLibrariesPanel extends JPanel {
 			}
 		});
 
-		// The honesty disclaimer this whole window exists to make good on: static detection of
+		// The honesty disclaimer this whole panel exists to make good on: static detection of
 		// loadLibrary/load call sites cannot see reflection or a name assembled at runtime, so the
 		// picture below -- however complete it looks -- is a best-effort lower bound, not a proof.
 		JLabel disclaimer = new JLabel(
@@ -295,11 +296,13 @@ public class LoadedLibrariesPanel extends JPanel {
 		bottom.setBorder(new EmptyBorder(2, 4, 2, 4));
 		bottom.add(countLabel, BorderLayout.WEST);
 
-		add(north, BorderLayout.NORTH);
-		add(new JScrollPane(tree), BorderLayout.CENTER);
 		// same placement as LibraryTreePanel's: filter/disclaimer up top, count label at the
 		// bottom as a status line
+		add(north, BorderLayout.NORTH);
+		add(new JScrollPane(tree), BorderLayout.CENTER);
 		add(bottom, BorderLayout.SOUTH);
+		DialogUtils.installFilterFindShortcut(this, "jexray-find-libraries", this::focusFilter);
+		DialogUtils.installFilterEscape(filterField, tree);
 	}
 
 	/** Replace the whole tree's data (resolved libraries, unresolved calls, unloaded .so's). */
@@ -308,8 +311,8 @@ public class LoadedLibrariesPanel extends JPanel {
 		rebuildTree();
 	}
 
-	/** Shown right when the window opens, while the whole-input bytecode scan for load calls runs
-	 * off the EDT (see {@code JexrayPlugin#showLoadedLibraries}) -- so an empty tree never briefly
+	/** Shown right when the panel is first filled, while the whole-input bytecode scan for load
+	 * calls runs off the EDT (see {@code JexrayPlugin#showLoadedLibraries}) -- so an empty tree never briefly
 	 * reads as "this app loads nothing" before the real (first-open-only; later opens reuse the
 	 * cached scan) result arrives. */
 	public void setScanning() {
@@ -603,7 +606,7 @@ public class LoadedLibrariesPanel extends JPanel {
 			model.insertNodeInto(new DefaultMutableTreeNode("(no matching functions)"), node, node.getChildCount());
 			return;
 		}
-		// Grouped by the same rule the All Functions browser uses, so the two windows never put the
+		// Grouped by the same rule the All Functions browser uses, so the two panels never put the
 		// same function under different headings -- see LibraryTreePanel.groupFor.
 		Set<String> external = externalsBySoId.getOrDefault(lib.soId(), Set.of());
 		Set<String> exported = exportsBySoId.getOrDefault(lib.soId(), Set.of());
@@ -862,9 +865,15 @@ public class LoadedLibrariesPanel extends JPanel {
 		return p < 0 ? label : label.substring(0, p);
 	}
 
-	/** Focus the filter box (called when the window is surfaced, and on Ctrl+F/⌘+F). */
+	/** Focus the filter box: when this panel comes to the front of the sidebar, and on Ctrl+F/⌘F. */
+	@Override
 	public void focusFilter() {
 		filterField.requestFocusInWindow();
+	}
+
+	@Override
+	public JComponent asComponent() {
+		return this;
 	}
 
 }

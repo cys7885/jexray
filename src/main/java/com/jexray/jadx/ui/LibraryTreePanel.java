@@ -16,6 +16,7 @@ import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 
 import javax.swing.Icon;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
@@ -36,8 +37,7 @@ import javax.swing.tree.TreeSelectionModel;
 import com.jexray.jadx.nav.FunctionFilter;
 
 /**
- * Library list plus per-library function tree, shared by the Native View sidebar and the All
- * Functions dialog so both present libraries the same way (and so the behaviour exists once).
+ * Library list plus per-library function tree: the "All Functions" side panel of the Native View.
  *
  * <p>Each library shows its size and analysis state, because analysis time scales with size and a
  * large library can take an hour -- the user needs to see that before waiting on it, and needs to
@@ -51,7 +51,7 @@ import com.jexray.jadx.nav.FunctionFilter;
  * happened to expand already is indistinguishable from a genuine zero and is
  * actively misleading rather than merely incomplete.
  */
-public class LibraryTreePanel extends JPanel {
+public class LibraryTreePanel extends JPanel implements SidebarPanel {
 
 	private static final long serialVersionUID = 1L;
 
@@ -116,6 +116,12 @@ public class LibraryTreePanel extends JPanel {
 	// library; a soId simply absent here means "not yet known" (still counting, not READY, or no
 	// MatchCounter available) and must never be treated as a match -- see isMatchingCategoryNode.
 	private final Map<String, Boolean> matchBySoId = new LinkedHashMap<>();
+
+	/**
+	 * Groups that a filter query opened, so they can be told apart from the ones the user opened.
+	 * Emptied when the query is, which is what puts them back. Keyed like {@code expandedGroupKeys}.
+	 */
+	private final Set<String> filterOpenedGroups = new java.util.HashSet<>();
 
 	// state for the in-flight eager total count; countEpoch identifies which run a pending async
 	// result belongs to, so a result from a query the user has since changed away from (superseded)
@@ -361,6 +367,8 @@ public class LibraryTreePanel extends JPanel {
 		add(filterRow, BorderLayout.NORTH);
 		add(new JScrollPane(tree), BorderLayout.CENTER);
 		add(bottom, BorderLayout.SOUTH);
+		DialogUtils.installFilterFindShortcut(this, "jexray-find-functions", this::focusFilter);
+		DialogUtils.installFilterEscape(filterField, tree);
 	}
 
 	/**
@@ -443,6 +451,13 @@ public class LibraryTreePanel extends JPanel {
 
 		root.removeAllChildren();
 		String query = filterField.getText();
+		if (query.isEmpty()) {
+			// Groups the filter opened belong to the filter, not to the user: clearing the query has
+			// to put them back, or a search leaves every group it touched hanging open over the now
+			// unfiltered list -- thousands of rows nobody asked to see.
+			expandedGroups.removeAll(filterOpenedGroups);
+			filterOpenedGroups.clear();
+		}
 		for (LibraryEntry lib : libraries.values()) {
 			DefaultMutableTreeNode node = new DefaultMutableTreeNode(lib);
 			node.add(new DefaultMutableTreeNode("…")); // placeholder; real children on expand
@@ -461,8 +476,23 @@ public class LibraryTreePanel extends JPanel {
 				// title (the count in the label changes as the filter narrows, the title doesn't)
 				for (int j = 0; j < n.getChildCount(); j++) {
 					DefaultMutableTreeNode grp = (DefaultMutableTreeNode) n.getChildAt(j);
-					if (grp.getUserObject() instanceof String s
-							&& expandedGroups.contains(lib.soId() + GROUP_KEY_SEP + groupTitle(s))) {
+					if (!(grp.getUserObject() instanceof String s)) {
+						continue;
+					}
+					String groupKey = lib.soId() + GROUP_KEY_SEP + groupTitle(s);
+					boolean wasOpen = expandedGroups.contains(groupKey);
+					// A search should show what it found. rebuildChildren has already narrowed each
+					// group to matches, so a non-empty one holds nothing but hits -- leaving it shut
+					// makes the user open every group to see the results they just asked for. Empty
+					// groups stay shut: they are listed so "(0)" can be read as an answer, and
+					// opening them would only add blank rows between the ones that matched.
+					//
+					// Opened once per query, not once per keystroke: a group the user collapsed while
+					// still typing has to stay collapsed, and re-deciding this on every rebuild would
+					// reopen it under them on the next character.
+					boolean openForMatches = !query.isEmpty() && grp.getChildCount() > 0
+							&& filterOpenedGroups.add(groupKey);
+					if (wasOpen || openForMatches) {
 						tree.expandPath(new TreePath(new Object[] { root, n, grp }));
 					}
 				}
@@ -639,7 +669,7 @@ public class LibraryTreePanel extends JPanel {
 	 * and registers.
 	 *
 	 * <p>The single place this is decided. Both trees that show a library's symbols call it, so a
-	 * function cannot land under one heading in one window and another heading in the other -- and,
+	 * function cannot land under one heading in one panel and another heading in the other -- and,
 	 * since the icon follows the group, cannot carry two different icons either.
 	 *
 	 * <p>Order matters. A name linked in from elsewhere is an import whatever else it looks like; an
@@ -919,9 +949,15 @@ public class LibraryTreePanel extends JPanel {
 		}
 	}
 
-	/** Focus the filter box (called when the panel is surfaced). */
+	/** Focus the filter box: when this panel comes to the front of the sidebar, and on Ctrl+F/⌘F. */
+	@Override
 	public void focusFilter() {
 		filterField.requestFocusInWindow();
+	}
+
+	@Override
+	public JComponent asComponent() {
+		return this;
 	}
 
 }

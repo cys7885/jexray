@@ -140,6 +140,7 @@ That's it — open an APK and right-click a native method.
    - **◀ Back** / **Forward ▶** to retrace your steps; right-click either button for a full history dropdown.
    - **☰ All Functions** to browse every function as a per-library tree; the filter counts matches across all libraries, and each library shows its size. Right-click a library to **Re-analyze** it.
    - **Loaded Libraries** to see what the app loads via `System.loadLibrary`, with load sites and exported functions.
+   - Both lists open in a sidebar beside the code, so picking a function and reading it stay one task. Pressing the same button again collapses the sidebar, and its edge drags to resize. Which list was showing, how wide it was, and whether it was open at all come back next time. `Ctrl`/`⌘`+`F` goes to the filter on whichever side you last clicked — the sidebar's or the code's — and `Esc` in a filter clears it.
    - **◀ Go to Java Source** to jump back to the native method's declaration in JADX.
    - **Cache…** to see how much disk the analysis cache uses and clear it.
    - **Sync** toggle to make the dialog follow your caret automatically as you browse native methods in the Java editor.

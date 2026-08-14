@@ -57,12 +57,13 @@ import com.jexray.jadx.ghidra.EmbeddedGhidraBridge;
 import com.jexray.jadx.nav.SyncDebouncer;
 import com.jexray.jadx.symbols.NativeSymbols;
 import com.jexray.jadx.ui.CacheDialog;
-import com.jexray.jadx.ui.FunctionListDialog;
 import com.jexray.jadx.ui.JexrayIcons;
 import com.jexray.jadx.ui.LibraryEntry;
-import com.jexray.jadx.ui.LoadedLibrariesDialog;
+import com.jexray.jadx.ui.LibraryTreePanel;
+import com.jexray.jadx.ui.LoadedLibrariesPanel;
 import com.jexray.jadx.ui.NativeFunctionView;
 import com.jexray.jadx.ui.NativeViewDialog;
+import com.jexray.jadx.ui.UiPrefs;
 import com.jexray.jadx.ui.XrefEntry;
 import com.jexray.jadx.ui.XrefsView;
 import com.jexray.jadx.util.HumanFormat;
@@ -136,7 +137,13 @@ public class JexrayPlugin implements JadxPlugin {
 	private volatile String currentSoId; // soId of the most recently opened function (picker default)
 
 	private NativeViewDialog dialog;
-	private FunctionListDialog functionListDialog;
+	/**
+	 * The two symbol lists, built once and living in the Native View's sidebar rather than in
+	 * windows of their own. Held here because the callbacks they need -- what to open, which library
+	 * to load, how to count matches -- are all this class's.
+	 */
+	private LibraryTreePanel functionsPanel;
+	private LoadedLibrariesPanel librariesPanel;
 
 	/**
 	 * Per library, which listed names are linked in from elsewhere. Filled when a library's
@@ -157,7 +164,6 @@ public class JexrayPlugin implements JadxPlugin {
 	/** Guards against stacking up analyze-all sweeps when several windows are opened in a row. */
 	private final java.util.concurrent.atomic.AtomicBoolean analyzeAllInFlight =
 			new java.util.concurrent.atomic.AtomicBoolean();
-	private LoadedLibrariesDialog loadedLibrariesDialog;
 	private Timer syncTimer;
 	private EmbeddedGhidraBridge embeddedBridge;
 	private volatile boolean versionWarningShown;
@@ -1116,6 +1122,8 @@ public class JexrayPlugin implements JadxPlugin {
 					// because that is a jadx-gui class, and the icons live beside it.
 					gui == null ? null
 							: JexrayIcons.probing(gui::getSVGIcon, gui.getClass().getClassLoader()));
+			buildSidebarPanels();
+			dialog.setSidebarPanels(functionsPanel, librariesPanel);
 			// Change: populate the toolbar version label the moment the dialog exists, not only
 			// after the first successful decompile (previously the only caller of setVersionInfo
 			// was fetchAndShow's maybeWarnGhidraVersion). The Ghidra version may still be null
@@ -1493,12 +1501,12 @@ public class JexrayPlugin implements JadxPlugin {
 
 	/** Push the current library list to the open "All Functions" picker, if any (no-op otherwise). */
 	private void refreshLibraryTree() {
-		if (functionListDialog == null) {
+		if (functionsPanel == null) {
 			return;
 		}
 		List<LibraryEntry> libs = describeLibraries();
 		JadxGuiContext gui = context.getGuiContext();
-		Runnable r = () -> functionListDialog.setLibraries(libs);
+		Runnable r = () -> functionsPanel.setLibraries(libs);
 		if (gui != null) {
 			gui.uiRun(r);
 		} else {
@@ -1527,8 +1535,15 @@ public class JexrayPlugin implements JadxPlugin {
 				}
 			} catch (Exception e) {
 				LOG.warn("Failed to read cache stats", e);
-				NativeViewDialog d = getOrCreateDialog(gui);
-				d.flashStatus("Could not read the analysis cache: " + e.getMessage());
+				// on the UI thread: getOrCreateDialog builds the window and its side panels the
+				// first time it is asked, and this is a worker
+				Runnable report = () -> getOrCreateDialog(gui)
+						.flashStatus("Could not read the analysis cache: " + e.getMessage());
+				if (gui != null) {
+					gui.uiRun(report);
+				} else {
+					report.run();
+				}
 			}
 		}, "jexray-cache-stats");
 		worker.setDaemon(true);
@@ -1642,29 +1657,20 @@ public class JexrayPlugin implements JadxPlugin {
 	private void showLoadedLibraries() {
 		maybeAnalyzeAllOnBrowse();
 		JadxGuiContext gui = context.getGuiContext();
-		JFrame parent = gui == null ? null : gui.getMainFrame();
-		if (loadedLibrariesDialog == null) {
-			loadedLibrariesDialog = new LoadedLibrariesDialog(parent, this::openInJadx, this::loadLoadedLibraryFunctions,
-					this::readLoadedLibraryFunctionsForCount);
-			// Same handler the All Functions browser uses: open against the library the node sits
-			// under, not whatever was last viewed.
-			loadedLibrariesDialog.setOnPickFunction(
-					(pickedSoId, name) -> openSymbol(name, null, false, pickedSoId));
-		}
-		loadedLibrariesDialog.surface();
+		getOrCreateDialog(gui).showSidebarTabIfOpen(UiPrefs.TAB_LOADED_LIBRARIES);
 
 		List<LoadLibraryDetector.LoadLibraryCall> cached = loadLibraryCalls;
 		if (cached != null) {
-			loadedLibrariesDialog.setResult(LoadedLibrariesModel.build(cached, getSoManager()));
+			librariesPanel.setResult(LoadedLibrariesModel.build(cached, getSoManager()));
 			return;
 		}
-		loadedLibrariesDialog.setScanning();
+		librariesPanel.setScanning();
 		Thread worker = new Thread(() -> {
 			LoadedLibrariesModel.Result result = LoadedLibrariesModel.build(getLoadLibraryCalls(), getSoManager());
 			JadxGuiContext gui2 = context.getGuiContext();
 			Runnable push = () -> {
-				if (loadedLibrariesDialog != null) {
-					loadedLibrariesDialog.setResult(result);
+				if (librariesPanel != null) {
+					librariesPanel.setResult(result);
 				}
 			};
 			if (gui2 != null) {
@@ -1758,9 +1764,9 @@ public class JexrayPlugin implements JadxPlugin {
 			Set<String> exported = dynamicExportsOf(soId);
 			Set<String> registered = registeredNamesBySoId.getOrDefault(soId, Set.of());
 			Runnable push = () -> {
-				if (loadedLibrariesDialog != null) {
-					loadedLibrariesDialog.setSymbolFacts(soId, imported, exported, registered);
-					loadedLibrariesDialog.setFunctions(soId, finalNames);
+				if (librariesPanel != null) {
+					librariesPanel.setSymbolFacts(soId, imported, exported, registered);
+					librariesPanel.setFunctions(soId, finalNames);
 				}
 			};
 			if (gui != null) {
@@ -1866,26 +1872,43 @@ public class JexrayPlugin implements JadxPlugin {
 		});
 	}
 
+	/**
+	 * Build the sidebar's two panels and hand them to the Native View, once.
+	 *
+	 * <p>They are created here rather than by the window because every callback they take is this
+	 * class's: opening a symbol against the library whose node was clicked, loading a library on
+	 * expand, counting filter matches through the bridge. The window decides only where they sit.
+	 *
+	 * <p>Built when the window is, not when a list is first asked for -- otherwise opening the
+	 * Native View the ordinary way shows an empty sidebar until a toolbar button is pressed.
+	 */
+	private synchronized void buildSidebarPanels() {
+		if (functionsPanel != null) {
+			return;
+		}
+		functionsPanel = new LibraryTreePanel(
+				// picked from a specific library's list -> open against THAT .so directly
+				(pickedSoId, name) -> openSymbol(name, null, false, pickedSoId),
+				this::loadFunctionsAndShowPicker,
+				this::forceReanalyze,
+				this::countMatches);
+		librariesPanel = new LoadedLibrariesPanel(this::openInJadx, this::loadLoadedLibraryFunctions,
+				this::readLoadedLibraryFunctionsForCount);
+		// Same handler the All Functions list uses: open against the library the node sits under,
+		// not whatever was last viewed.
+		librariesPanel.setOnPickFunction((pickedSoId, name) -> openSymbol(name, null, false, pickedSoId));
+	}
+
 	private synchronized void showFunctionPicker(JadxGuiContext gui, String soId, List<String> names) {
 		List<LibraryEntry> libraries = describeLibraries();
 		Runnable show = () -> {
-			if (functionListDialog == null) {
-				JFrame parent = gui == null ? null : gui.getMainFrame();
-				functionListDialog = new FunctionListDialog(parent, libraries, soId, new ArrayList<>(names),
-						// picked from a specific library's list -> open against THAT .so directly
-						(pickedSoId, name) -> openSymbol(name, null, false, pickedSoId),
-						this::loadFunctionsAndShowPicker,
-						this::forceReanalyze,
-						this::countMatches);
-			} else {
-				functionListDialog.setLibraries(libraries);
-				functionListDialog.update(soId, names);
-			}
-			// after the names, so the browser already has the entries these apply to
-			functionListDialog.setExternalNames(soId, externalNamesBySoId.get(soId));
-			functionListDialog.setExportedNames(soId, exportedNamesBySoId.get(soId));
-			functionListDialog.setRegisteredNativeNames(soId, registeredNamesBySoId.get(soId));
-			functionListDialog.surface();
+			functionsPanel.setLibraries(libraries);
+			functionsPanel.setFunctions(soId, names);
+			// after the names, so the list already has the entries these apply to
+			functionsPanel.setExternalNames(soId, externalNamesBySoId.get(soId));
+			functionsPanel.setExportedNames(soId, exportedNamesBySoId.get(soId));
+			functionsPanel.setRegisteredNativeNames(soId, registeredNamesBySoId.get(soId));
+			getOrCreateDialog(gui).showSidebarTabIfOpen(UiPrefs.TAB_ALL_FUNCTIONS);
 		};
 		if (gui != null) {
 			gui.uiRun(show);

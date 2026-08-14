@@ -10,14 +10,66 @@ import javax.swing.ActionMap;
 import javax.swing.InputMap;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
+import javax.swing.JTextField;
 import javax.swing.KeyStroke;
 import javax.swing.text.JTextComponent;
 
 final class DialogUtils {
 
 	static final String ESC_ACTION_KEY = "jexray-close-on-escape";
+	private static final String FILTER_ESC_ACTION_KEY = "jexray-clear-filter-on-escape";
 
 	private DialogUtils() {
+	}
+
+	/**
+	 * Give {@code panel} the find shortcut for its own filter, live only while focus is inside it.
+	 *
+	 * <p>Scoped to the focused subtree rather than the window, because the Native View binds the same
+	 * key to the code search and the two now share a window. Swing resolves an ancestor binding
+	 * before a window-level one, so the side the user last clicked in is the side that answers. When
+	 * focus is somewhere belonging to neither -- a toolbar button, or a window just opened -- the
+	 * window-level binding wins and the key does what it does in every editor.
+	 */
+	static void installFilterFindShortcut(JComponent panel, String actionKey, Runnable focusFilter) {
+		int menuMask = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
+		InputMap im = panel.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT);
+		im.put(KeyStroke.getKeyStroke(KeyEvent.VK_F, menuMask), actionKey);
+		im.put(KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK), actionKey);
+		panel.getActionMap().put(actionKey, new AbstractAction() {
+			private static final long serialVersionUID = 1L;
+
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				focusFilter.run();
+			}
+		});
+	}
+
+	/**
+	 * Give Escape to the filter while the filter has focus: clear the query, or hand the keyboard
+	 * to the list once there is nothing left to clear.
+	 *
+	 * <p>Without this, Escape typed in a filter reaches the Native View's own binding and closes the
+	 * whole window. That was the right answer when these lists were windows of their own -- Escape
+	 * dismissed the list, which is what the user meant -- but they share a window with the code now,
+	 * and abandoning a search should not take the code being read along with it.
+	 */
+	static void installFilterEscape(JTextField filterField, JComponent list) {
+		KeyStroke esc = KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0);
+		filterField.getInputMap(JComponent.WHEN_FOCUSED).put(esc, FILTER_ESC_ACTION_KEY);
+		filterField.getActionMap().put(FILTER_ESC_ACTION_KEY, new AbstractAction() {
+			private static final long serialVersionUID = 1L;
+
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				if (filterField.getText().isEmpty()) {
+					list.requestFocusInWindow();
+				} else {
+					filterField.setText("");
+				}
+			}
+		});
 	}
 
 	/**
