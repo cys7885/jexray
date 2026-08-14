@@ -281,10 +281,14 @@ public class NativeViewDialog extends JDialog {
 
 		// A guaranteed way to copy the error text: on some platforms Ctrl/⌘-C over the read-only
 		// code area doesn't land (focus/keymap quirks), and the message may carry a long Ghidra tail.
+		// Deliberately a text button. jadx has never shipped an icon for copying -- not in any
+		// release this plugin supports -- so asking for one only ever left the code reading as
+		// though it expected an icon that could not arrive. Drawing our own would be worse: the
+		// rest of this toolbar is jadx's grey line art, and a mark in the plugin's own style would
+		// sit among it as the one thing that does not belong.
 		copyErrorButton = new JButton("Copy");
 		copyErrorButton.setToolTipText("Copy this error message to the clipboard");
 		copyErrorButton.setVisible(false);
-		applyIcon(copyErrorButton, JexrayIcons.loadFirst(iconSource, "ui/copy"), "Copy");
 		copyErrorButton.addActionListener(e -> copyErrorToClipboard());
 
 		backButton = new JButton("◀ Back");
