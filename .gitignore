@@ -21,10 +21,6 @@ id_rsa*
 credentials*
 secrets*
 
-# Tests and test fixtures are kept outside this repository and are never tracked
-# here; see the Contributing section of the README.
-src/test/
-
 # OS
 .DS_Store
 ._*

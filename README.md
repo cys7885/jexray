@@ -163,7 +163,7 @@ Open JADX's **Preferences → Plugins → Jexray Native View**:
 mvn clean package
 ```
 
-Produces a single self-contained shaded jar at `target/jexray-<version>.jar`. Test suites are maintained outside this repository and are not part of the published source.
+Produces a single self-contained shaded jar at `target/jexray-<version>.jar`. Tests live in `src/test` and run with `mvn test` (they are compiled and run from source but excluded from the shaded jar).
 
 ## Security model
 
@@ -182,7 +182,7 @@ Deliberately out of scope for the current release, tracked here rather than sile
 
 Issues and PRs welcome. Please prefer JADX's public plugin API (`jadx.api.*`) and never patch jadx-gui source — the plugin must keep installing as a plain dropin jar. Internal `jadx.core.*` types are used where the plugin API hands them to us (a decompile pass receives `ClassNode`/`MethodNode`) or where bytecode-level inspection has no public equivalent; keep new uses of those to the minimum a change actually needs, since they are what a JADX release can break.
 
-Test suites live outside this repository, so a PR is not expected to add tests — describe how you verified the change instead.
+Tests live in `src/test` and run with `mvn test`. A bug-fix PR should add a regression test that fails on the old behaviour and passes with the fix; for other changes, describe how you verified them.
 
 ## Acknowledgments
 

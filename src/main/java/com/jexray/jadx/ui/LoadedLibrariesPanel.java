@@ -176,7 +176,7 @@ public class LoadedLibrariesPanel extends JPanel implements SidebarPanel {
 				boolean bold = false;
 				javax.swing.Icon icon = null;
 				if (value instanceof DefaultMutableTreeNode n) {
-					String label = labelFor(n.getUserObject());
+					String label = safeLabelFor(n.getUserObject());
 					if (n.getUserObject() instanceof ResolvedLibrary) {
 						icon = SymbolIcon.LIBRARY;
 					}
@@ -687,6 +687,23 @@ public class LoadedLibrariesPanel extends JPanel implements SidebarPanel {
 			return c.site().ref();
 		}
 		return null;
+	}
+
+	/**
+	 * {@link #labelFor} guarded so a class-resolution failure in the tree renderer can never bring
+	 * down the whole Look-and-Feel refresh. If this panel is ever repainted after its plugin
+	 * classloader has been closed (jadx reloads plugins on project reopen; a stale panel can outlive
+	 * the old loader), the {@code instanceof} against a not-yet-loaded record throws
+	 * {@link NoClassDefFoundError} from inside {@code updateComponentTreeUI} -- which would otherwise
+	 * break theme switching for the whole of jadx (issue #1). Falling back to {@code null} renders
+	 * the node with its default label. Belt-and-suspenders alongside disposing the dialog on unload.
+	 */
+	private static String safeLabelFor(Object userObject) {
+		try {
+			return labelFor(userObject);
+		} catch (Throwable t) {
+			return null;
+		}
 	}
 
 	private static String labelFor(Object userObject) {

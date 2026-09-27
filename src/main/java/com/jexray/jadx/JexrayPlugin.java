@@ -18,6 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import javax.swing.JFrame;
 import javax.swing.JOptionPane;
+import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 
 import org.slf4j.Logger;
@@ -224,6 +225,27 @@ public class JexrayPlugin implements JadxPlugin {
 		if (embeddedBridge != null) {
 			embeddedBridge.stop();
 			embeddedBridge = null;
+		}
+		// Dispose our Swing UI so nothing outlives this plugin's classloader. jadx reloads plugins
+		// in a fresh classloader (e.g. reopening a project); a NativeViewDialog left behind is still
+		// enrolled with FlatLaf, so a later Look-and-Feel refresh (updateComponentTreeUI -- opening
+		// Settings or switching theme) repaints its tree and lazily loads a renderer class from the
+		// now-closed classloader, throwing NoClassDefFoundError (issue #1). The sidebar panels live
+		// inside the dialog, so disposing it drops them too; drop our references as well.
+		NativeViewDialog d = dialog;
+		dialog = null;
+		functionsPanel = null;
+		librariesPanel = null;
+		if (d != null) {
+			Runnable dispose = () -> {
+				d.setVisible(false);
+				d.dispose();
+			};
+			if (SwingUtilities.isEventDispatchThread()) {
+				dispose.run();
+			} else {
+				SwingUtilities.invokeLater(dispose);
+			}
 		}
 	}
 
