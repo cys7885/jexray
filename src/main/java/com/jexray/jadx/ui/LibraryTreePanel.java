@@ -58,6 +58,17 @@ public class LibraryTreePanel extends JPanel implements SidebarPanel {
 	/** JNI entry points follow the {@code Java_pkg_Class_method} mangling. */
 	private static final String JNI_PREFIX = "Java_";
 
+	/**
+	 * The four group headings, in tree order, spelled exactly as this tree shows them. Also the
+	 * folder names {@link com.jexray.jadx.export.ProjectExporter} writes on disk -- the export's
+	 * whole promise is that the structure matches this tree -- so they must stay safe as
+	 * directory names on Windows, macOS and Linux (they are).
+	 */
+	public static final String GROUP_JNI = "JNI methods";
+	public static final String GROUP_FUNCTIONS = "Functions";
+	public static final String GROUP_EXPORTS = "Exports";
+	public static final String GROUP_IMPORTS = "Imports";
+
 	/** Quiet period before a filter edit turns into bridge queries, so a burst of keystrokes
 	 * (typing "app") issues one batch of per-library counts instead of one batch per character. */
 	private static final int COUNT_DEBOUNCE_MS = 250;
@@ -649,19 +660,19 @@ public class LibraryTreePanel extends JPanel implements SidebarPanel {
 		List<String> imports = new ArrayList<>();
 		for (String n : names) {
 			switch (groupFor(n, external, exported, registered)) {
-				case "Imports" -> imports.add(n);
-				case "JNI methods" -> jni.add(n);
-				case "Exports" -> exports.add(n);
+				case GROUP_IMPORTS -> imports.add(n);
+				case GROUP_JNI -> jni.add(n);
+				case GROUP_EXPORTS -> exports.add(n);
 				default -> internal.add(n);
 			}
 		}
 		// Every group is listed even when it holds nothing. "JNI methods (0)" is an answer -- this
 		// library exposes no entry point of that kind -- whereas a missing group is ambiguous: the
 		// reader cannot tell it apart from a group that failed to build or was filtered away.
-		node.add(group("JNI methods", jni));
-		node.add(group("Functions", internal));
-		node.add(group("Exports", exports));
-		node.add(group("Imports", imports));
+		node.add(group(GROUP_JNI, jni));
+		node.add(group(GROUP_FUNCTIONS, internal));
+		node.add(group(GROUP_EXPORTS, exports));
+		node.add(group(GROUP_IMPORTS, imports));
 		model.nodeStructureChanged(node);
 	}
 
@@ -677,24 +688,28 @@ public class LibraryTreePanel extends JPanel implements SidebarPanel {
 	 * entry point is one by membership of the registration table, not by spelling, because
 	 * registration puts no constraint at all on the name -- a stripped binary leaves entry points
 	 * named like {@code FUN_...}; and what is left is an export only if the library publishes it.
+	 *
+	 * <p>Public because {@link com.jexray.jadx.export.ProjectExporter} groups its on-disk folders
+	 * by calling this very method -- one classifier, so a symbol cannot be filed under one heading
+	 * in the tree and another on disk.
 	 */
-	static String groupFor(String name, Set<String> external, Set<String> exported, Set<String> registered) {
+	public static String groupFor(String name, Set<String> external, Set<String> exported, Set<String> registered) {
 		if (external.contains(name)) {
-			return "Imports";
+			return GROUP_IMPORTS;
 		}
 		if (isJniEntryPoint(name) || registered.contains(name)) {
-			return "JNI methods";
+			return GROUP_JNI;
 		}
-		return exported.contains(name) ? "Exports" : "Functions";
+		return exported.contains(name) ? GROUP_EXPORTS : GROUP_FUNCTIONS;
 	}
 
 	/** The icon for a group title, so a caller that already knows the group need not build a node. */
 	static Icon iconForGroup(String group) {
 		return switch (group) {
-			case "JNI methods" -> SymbolIcon.JNI;
-			case "Functions" -> SymbolIcon.INTERNAL;
-			case "Exports" -> SymbolIcon.EXPORT;
-			case "Imports" -> SymbolIcon.IMPORT;
+			case GROUP_JNI -> SymbolIcon.JNI;
+			case GROUP_FUNCTIONS -> SymbolIcon.INTERNAL;
+			case GROUP_EXPORTS -> SymbolIcon.EXPORT;
+			case GROUP_IMPORTS -> SymbolIcon.IMPORT;
 			default -> null;
 		};
 	}

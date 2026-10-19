@@ -68,6 +68,9 @@ import com.jexray.jadx.nav.NavigationHistory;
  *   <li>Sync toggle: follow the jadx caret automatically (driven by the plugin).</li>
  *   <li>"Xref" toolbar button / right-click "Show xrefs": callers of the currently-displayed
  *       function, scoped to its own library -- see {@link XrefsView}.</li>
+ *   <li>"Export Project": write every native library out to a chosen folder as a browsable
+ *       project -- pseudocode and/or disassembly, mirroring the All Functions tree -- see
+ *       {@link com.jexray.jadx.export.ProjectExporter}.</li>
  * </ul>
  */
 public class NativeViewDialog extends JDialog {
@@ -194,6 +197,11 @@ public class NativeViewDialog extends JDialog {
 	// (see JexrayOptions), so this lives here in the Native View toolbar instead of Preferences.
 	private final Runnable onShowCache;
 	private final JButton cacheButton;
+	// "Export…": write every native library out to disk as a project -- pseudocode and/or
+	// disassembly, one folder per library mirroring the All Functions tree's exact groups.
+	// Null in callers that don't offer it, so the button stays disabled rather than dead.
+	private final Runnable onExportProject;
+	private final JButton exportButton;
 	// Xrefs ("who calls this?"): fires with (soId, symbol) of the function currently on screen --
 	// same source of truth as onOpenSymbol's call-following (history.current()), so xrefs is
 	// always scoped to the library actually displayed. The plugin fetches asynchronously and
@@ -261,7 +269,25 @@ public class NativeViewDialog extends JDialog {
 			Runnable onShowLoadedLibraries,
 			JexrayIcons.IconSource iconSource) {
 		this(parent, onNavigateToJava, onOpenSymbol, onSyncToggled, onListFunctions, onReportBug, onShowCache,
-				onShowXrefs, onShowLoadedLibraries, new UiPrefs(), iconSource);
+				onShowXrefs, onShowLoadedLibraries, null, iconSource);
+	}
+
+	/**
+	 * Full constructor: every toolbar action wired, including "Export Project".
+	 */
+	public NativeViewDialog(JFrame parent,
+			Consumer<ICodeNodeRef> onNavigateToJava,
+			BiConsumer<String, String> onOpenSymbol,
+			Consumer<Boolean> onSyncToggled,
+			Runnable onListFunctions,
+			Consumer<BugReportContext> onReportBug,
+			Runnable onShowCache,
+			BiConsumer<String, String> onShowXrefs,
+			Runnable onShowLoadedLibraries,
+			Runnable onExportProject,
+			JexrayIcons.IconSource iconSource) {
+		this(parent, onNavigateToJava, onOpenSymbol, onSyncToggled, onListFunctions, onReportBug, onShowCache,
+				onShowXrefs, onShowLoadedLibraries, onExportProject, new UiPrefs(), iconSource);
 	}
 
 	/**
@@ -277,6 +303,7 @@ public class NativeViewDialog extends JDialog {
 			Runnable onShowCache,
 			BiConsumer<String, String> onShowXrefs,
 			Runnable onShowLoadedLibraries,
+			Runnable onExportProject,
 			UiPrefs uiPrefs,
 			JexrayIcons.IconSource iconSource) {
 		super(parent, "Jexray - Native View", false);
@@ -289,6 +316,7 @@ public class NativeViewDialog extends JDialog {
 		this.onShowCache = onShowCache;
 		this.onShowXrefs = onShowXrefs;
 		this.onShowLoadedLibraries = onShowLoadedLibraries;
+		this.onExportProject = onExportProject;
 		this.warningIcon = JexrayIcons.load(iconSource, "ui/warning");
 		this.errorIcon = JexrayIcons.load(iconSource, "ui/error");
 		setDefaultCloseOperation(HIDE_ON_CLOSE);
@@ -393,6 +421,20 @@ public class NativeViewDialog extends JDialog {
 		});
 		applyIcon(cacheButton, JexrayIcons.loadFirst(iconSource, "ui/save", "ui/settings"), "Cache");
 
+		exportButton = new JButton("Export…");
+		exportButton.setToolTipText("Export every native library as a project on disk: pseudocode "
+				+ "and/or disassembly — one file per library (default) or a folder per library "
+				+ "mirroring the All Functions tree");
+		exportButton.setEnabled(onExportProject != null);
+		exportButton.addActionListener(e -> {
+			if (onExportProject != null) {
+				onExportProject.run();
+			}
+		});
+		// "ui/save" is the closest icon any supported jadx ships for this; "ui/export" is a
+		// guess probed for free (see JexrayIcons.probing).
+		applyIcon(exportButton, JexrayIcons.loadFirst(iconSource, "ui/export", "ui/save"), "Export");
+
 		xrefButton = new JButton("Xref");
 		xrefButton.setToolTipText("Show cross references: who calls this function");
 		xrefButton.setEnabled(false);
@@ -416,6 +458,7 @@ public class NativeViewDialog extends JDialog {
 		toolbar.addSeparator();
 		toolbar.add(reportBugButton);
 		toolbar.add(cacheButton);
+		toolbar.add(exportButton);
 		toolbar.add(Box.createHorizontalGlue());
 		versionLabel = new JLabel(" ");
 		versionLabel.setBorder(new EmptyBorder(0, 6, 0, 8));

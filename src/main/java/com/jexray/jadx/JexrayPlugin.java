@@ -4,6 +4,8 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -15,6 +17,8 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 import javax.swing.JFrame;
 import javax.swing.JOptionPane;
@@ -54,10 +58,12 @@ import com.jexray.jadx.bridge.LoadDeadline;
 import com.jexray.jadx.bridge.PrewarmProgress;
 import com.jexray.jadx.bridge.PrewarmProgress.LibState;
 import com.jexray.jadx.apk.LoadedLibrariesModel;
+import com.jexray.jadx.export.ProjectExporter;
 import com.jexray.jadx.ghidra.EmbeddedGhidraBridge;
 import com.jexray.jadx.nav.SyncDebouncer;
 import com.jexray.jadx.symbols.NativeSymbols;
 import com.jexray.jadx.ui.CacheDialog;
+import com.jexray.jadx.ui.ExportDialog;
 import com.jexray.jadx.ui.JexrayIcons;
 import com.jexray.jadx.ui.LibraryEntry;
 import com.jexray.jadx.ui.LibraryTreePanel;
@@ -133,11 +139,16 @@ public class JexrayPlugin implements JadxPlugin {
 	private final Map<String, Integer> functionCountBySoId = new ConcurrentHashMap<>();
 	// One global lock, not one per .so: an on-demand load holds it for its whole submit-and-poll
 	// loop, so a second library's on-demand load waits behind it. That prevents duplicate
-	// concurrent loads of the same .so, at the cost of serializing different ones.
-	private final Object loadLock = new Object();
+	// concurrent loads of the same .so, at the cost of serializing different ones. A ReentrantLock
+	// (not synchronized) because the wait is sliced: a cancellable caller -- the export, which must
+	// honour Cancel even while queued behind another library's analysis -- polls its flag between
+	// slices instead of blocking on a monitor nobody can interrupt.
+	private final ReentrantLock loadLock = new ReentrantLock();
 	private volatile String currentSoId; // soId of the most recently opened function (picker default)
 
 	private NativeViewDialog dialog;
+	/** The one open Export Project window; non-modal, so a second Export… raises it. */
+	private volatile ExportDialog exportDialog;
 	/**
 	 * The two symbol lists, built once and living in the Native View's sidebar rather than in
 	 * windows of their own. Held here because the callbacks they need -- what to open, which library
@@ -215,6 +226,9 @@ public class JexrayPlugin implements JadxPlugin {
 		// window) so browsing is instant once the user asks for it -- but without popping the
 		// All Functions picker open uninvited; just show the dialog with a ready/progress state.
 		gui.addMenuAction("Jexray - Open Native View", () -> gui.uiRun(this::openNativeViewEager));
+		// Export Project deliberately has NO second entry in the Plugins menu: the Native View's
+		// toolbar button is its single entry point, so the plugin shows up as one thing rather
+		// than as a menu item, a toolbar button, and (inside the Native View) another button.
 	}
 
 	@Override
@@ -236,10 +250,18 @@ public class JexrayPlugin implements JadxPlugin {
 		dialog = null;
 		functionsPanel = null;
 		librariesPanel = null;
-		if (d != null) {
+		ExportDialog ed = exportDialog;
+		exportDialog = null;
+		if (d != null || ed != null) {
 			Runnable dispose = () -> {
-				d.setVisible(false);
-				d.dispose();
+				if (d != null) {
+					d.setVisible(false);
+					d.dispose();
+				}
+				if (ed != null) {
+					ed.setVisible(false);
+					ed.dispose();
+				}
 			};
 			if (SwingUtilities.isEventDispatchThread()) {
 				dispose.run();
@@ -627,10 +649,33 @@ public class JexrayPlugin implements JadxPlugin {
 	 */
 	private void ensureBridgeLoaded(GhidraBridgeClient client, String soId, NativeViewDialog d)
 			throws IOException, InterruptedException, BridgeException {
+		ensureBridgeLoaded(client, soId, d, null);
+	}
+
+	/**
+	 * Same, with a watch: the watch receives every poll's counts (so the export can show
+	 * function-level analysis progress), and its cancelled flag is honoured -- while waiting for
+	 * another library's load to release the lock, and between every poll while this library's own
+	 * analysis runs. A cancelled watch ends in {@link InterruptedException}; the export turns that
+	 * into a cancelled run, never a failed library. Nothing this stops reaches the bridge: an
+	 * analysis never submitted stays unsubmitted, and one already running simply keeps running
+	 * there -- where it costs nothing and warms the cache for the next attempt.
+	 */
+	private void ensureBridgeLoaded(GhidraBridgeClient client, String soId, NativeViewDialog d,
+			ProjectExporter.AnalysisWatch watch)
+			throws IOException, InterruptedException, BridgeException {
 		if (readySoIds.contains(soId)) {
 			return;
 		}
-		synchronized (loadLock) {
+		// Sliced wait for our turn: a cancellable caller (the export) must never be stuck behind
+		// another library's whole analysis -- it polls its flag between slices and can stop at once.
+		while (!loadLock.tryLock(LOAD_POLL_MS, TimeUnit.MILLISECONDS)) {
+			if (watch != null && watch.cancelled()) {
+				throw new InterruptedException("cancelled while waiting for " + soId
+						+ " to be analyzed");
+			}
+		}
+		try {
 			if (readySoIds.contains(soId)) {
 				return;
 			}
@@ -644,6 +689,9 @@ public class JexrayPlugin implements JadxPlugin {
 			// time spent queued behind another library must not count against this one
 			LoadDeadline deadline = new LoadDeadline(LOAD_TIMEOUT_MS, System.currentTimeMillis());
 			while (true) {
+				if (watch != null && watch.cancelled()) {
+					throw new InterruptedException("cancelled while " + soId + " was being analyzed");
+				}
 				StatusResult st = client.status(soId);
 				String status = st.status == null ? "" : st.status;
 				if ("ready".equals(status)) {
@@ -661,6 +709,9 @@ public class JexrayPlugin implements JadxPlugin {
 				if (d != null) {
 					d.showLoadProgress(soName, status, st.completed, st.total, st.message);
 				}
+				if (watch != null) {
+					watch.onStatus(status, st.completed, st.total, st.message);
+				}
 				if (deadline.isExpired(System.currentTimeMillis())) {
 					// not an analysis timeout: the analysis may well still be running. This only
 					// means the bridge stopped answering, so say that rather than blaming the
@@ -671,6 +722,8 @@ public class JexrayPlugin implements JadxPlugin {
 				}
 				Thread.sleep(LOAD_POLL_MS);
 			}
+		} finally {
+			loadLock.unlock();
 		}
 	}
 
@@ -1137,6 +1190,8 @@ public class JexrayPlugin implements JadxPlugin {
 					this::showXrefs,
 					// Loaded Libraries: which .so's the app asks the VM to load (Native-View-only)
 					this::showLoadedLibraries,
+					// Export Project: every library out to disk as a browsable project
+					this::showExportProject,
 					// jadx's own SVG icons (null under CLI / when unavailable -> text-only buttons).
 					// Routed through a source that checks jadx's resources before asking, so a
 					// candidate name this jadx does not ship is skipped rather than reported as an
@@ -1594,6 +1649,134 @@ public class JexrayPlugin implements JadxPlugin {
 			LOG.warn("Cache clear failed", e);
 			getOrCreateDialog(context.getGuiContext()).flashStatus("Cache clear failed: " + e.getMessage());
 		}
+	}
+
+	/**
+	 * "Export Project" (Native View toolbar "Export…"): write the selected native libraries out
+	 * to a fresh, timestamped subfolder of the chosen folder as a browsable project (the dialog
+	 * lists every library, checked by default -- excluding is a matter of unchecking) -- either
+	 * one file per library (default) or, in the split layout, one folder per library mirroring
+	 * the All Functions tree's exact groups ({@code JNI methods}/{@code Functions}/{@code Exports}/
+	 * {@code Imports}) with one file per function, holding its Ghidra pseudocode ({@code .c})
+	 * and/or disassembly ({@code .asm}). See {@link ProjectExporter}. The dialog is non-modal, so
+	 * jadx stays fully usable while the export runs, and only one of it exists: a second
+	 * "Export…" raises the open one.
+	 *
+	 * <p>Libraries not yet analyzed are analyzed on the way past (same
+	 * {@link #ensureBridgeLoaded} the browse path uses, so anything already warm -- in this
+	 * session or in the disk cache -- costs nothing); Cancel takes effect even while a library is
+	 * still being analyzed, and one library's failure never stops the rest -- the manifest says
+	 * what did and didn't make it out.
+	 */
+	private void showExportProject() {
+		JadxGuiContext gui = context.getGuiContext();
+		JFrame parent = gui == null ? null : gui.getMainFrame();
+		NativeViewDialog d = getOrCreateDialog(gui);
+		SoManager mgr = getSoManager();
+		if (!mgr.hasNativeLibraries()) {
+			d.flashStatus("No native library (lib/*/*.so) found in the loaded input — nothing to export.");
+			return;
+		}
+		ExportDialog existing = exportDialog;
+		if (existing != null && existing.isDisplayable()) {
+			// non-modal: a second Export… must not stack a second window (and a second run)
+			// on top of one already going -- just raise what is there.
+			existing.toFront();
+			existing.requestFocus();
+			return;
+		}
+		Map<String, String> names = mgr.soIdToName();
+		List<ProjectExporter.Library> libs = new ArrayList<>();
+		for (String soId : mgr.soIds()) {
+			libs.add(new ProjectExporter.Library(soId, names.getOrDefault(soId, soId)));
+		}
+		// Read now, on the EDT: the bridge may still be starting up, and this is only a label.
+		String ghidraVersion = currentGhidraVersion();
+		ExportDialog dialog = new ExportDialog(parent, libs,
+				(selected, options, cancelled, dlg) -> {
+			Thread worker = new Thread(() -> {
+				ProjectExporter.Result result;
+				try {
+					GhidraBridgeClient client = new GhidraBridgeClient(resolveBridgeUrl());
+					ProjectExporter exporter = new ProjectExporter(PluginVersion.get(), ghidraVersion,
+							exportFunctionSource(client),
+							// null dialog: analysis progress belongs to the export window (its own
+							// "analyzing" phase), not to the Native View's lock overlay; the watch
+							// forwards the bridge's counts there and observes Cancel, so the run
+							// stops while Ghidra is still working instead of after it finishes.
+							(soId, watch) -> ensureBridgeLoaded(client, soId, null, watch));
+					result = exporter.run(options, selected, cancelled, dlg);
+				} catch (RuntimeException e) {
+					// An unexpected explosion must not leave the dialog spinning on "Preparing…"
+					// forever; report it as a failed run (a failed run keeps the window open,
+					// so the message is readable there).
+					LOG.warn("Export run failed", e);
+					result = new ProjectExporter.Result(false, 0, 0, 0, selected, List.of(),
+							List.of("Export failed: " + e), options.rootDir());
+				}
+				dlg.finished(result);
+				// the same sentence in the Native View's status bar, for whoever left it open
+				getOrCreateDialog(gui).flashStatus(result.summary());
+			}, "jexray-export");
+			worker.setDaemon(true);
+			worker.start();
+		});
+		exportDialog = dialog;
+		dialog.addWindowListener(new WindowAdapter() {
+			@Override
+			public void windowClosed(WindowEvent e) {
+				if (exportDialog == dialog) {
+					exportDialog = null;
+				}
+			}
+		});
+		dialog.setVisible(true);
+	}
+
+	/**
+	 * {@link ProjectExporter.FunctionSource} over the bridge, plus the same two local symbol reads
+	 * the All Functions tree groups by ({@link #dynamicExportsOf},
+	 * {@link #registeredSymbolsOf}) -- so the exported folders land under exactly the headings the
+	 * tree shows, for the same reasons.
+	 */
+	private ProjectExporter.FunctionSource exportFunctionSource(GhidraBridgeClient client) {
+		return new ProjectExporter.FunctionSource() {
+			@Override
+			public List<FunctionRef> listFunctions(String soId) throws BridgeException, InterruptedException {
+				// empty query returns every function (substring match against "") -- same call
+				// loadFunctionsAndShowPicker makes for the All Functions tree
+				SearchResult res = client.search(soId, "");
+				List<FunctionRef> out = new ArrayList<>();
+				if (res.functions != null) {
+					for (FunctionRef f : res.functions) {
+						if (f != null && f.name != null) {
+							out.add(f);
+						}
+					}
+				}
+				return out;
+			}
+
+			@Override
+			public String pseudocode(String soId, String name) throws BridgeException, InterruptedException {
+				return client.decompile(soId, name).pseudocode;
+			}
+
+			@Override
+			public String disassembly(String soId, String name) throws BridgeException, InterruptedException {
+				return client.disassemble(soId, name).disassembly;
+			}
+
+			@Override
+			public Set<String> exportedSymbols(String soId) {
+				return dynamicExportsOf(soId);
+			}
+
+			@Override
+			public Set<String> registeredSymbols(String soId) {
+				return registeredSymbolsOf(client, soId);
+			}
+		};
 	}
 
 	/**

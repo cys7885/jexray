@@ -38,10 +38,17 @@ public final class UiPrefs {
 	public static final int TAB_ALL_FUNCTIONS = 0;
 	public static final int TAB_LOADED_LIBRARIES = 1;
 
+	/** Where the export dialog points before the user has ever chosen a folder. */
+	public static final String DEFAULT_EXPORT_DIR =
+			new File(System.getProperty("user.home"), "JexrayExports").getAbsolutePath();
+
 	private static final String FONT_SIZE_KEY = "pseudocode.font.size";
 	private static final String SIDEBAR_VISIBLE_KEY = "sidebar.visible";
 	private static final String SIDEBAR_WIDTH_KEY = "sidebar.width";
 	private static final String SIDEBAR_TAB_KEY = "sidebar.tab";
+	private static final String EXPORT_DIR_KEY = "export.dir";
+	private static final String EXPORT_LAYOUT_KEY = "export.layout";
+	private static final String EXPORT_OPEN_WHEN_DONE_KEY = "export.openWhenDone";
 	private static final String FILE_NAME = "ui.properties";
 
 	private final File file;
@@ -99,6 +106,54 @@ public final class UiPrefs {
 		if (index == TAB_ALL_FUNCTIONS || index == TAB_LOADED_LIBRARIES) {
 			write(SIDEBAR_TAB_KEY, Integer.toString(index));
 		}
+	}
+
+	/** The folder the export dialog last wrote to; {@link #DEFAULT_EXPORT_DIR} before the first
+	 * export (or if the stored one is blank). */
+	public String loadExportDir() {
+		String raw = read().getProperty(EXPORT_DIR_KEY);
+		if (raw == null || raw.trim().isEmpty()) {
+			return DEFAULT_EXPORT_DIR;
+		}
+		return raw.trim();
+	}
+
+	public void saveExportDir(String dir) {
+		if (dir != null && !dir.trim().isEmpty()) {
+			write(EXPORT_DIR_KEY, dir.trim());
+		}
+	}
+
+	/**
+	 * The layout the export dialog last used, as a {@code ProjectExporter.Layout} name. Defaults
+	 * to {@code SINGLE_FILES} (one file per library) -- keyed by name rather than an enum import
+	 * so this class stays free of export-package coupling, same reason it avoids Swing.
+	 */
+	public String loadExportLayout() {
+		String raw = read().getProperty(EXPORT_LAYOUT_KEY);
+		if (raw == null || raw.trim().isEmpty()) {
+			return "SINGLE_FILES";
+		}
+		return raw.trim();
+	}
+
+	public void saveExportLayout(String layoutName) {
+		if (layoutName != null && !layoutName.trim().isEmpty()) {
+			write(EXPORT_LAYOUT_KEY, layoutName.trim());
+		}
+	}
+
+	/**
+	 * Whether the export dialog should open the export folder in the file manager once an export
+	 * finishes cleanly. Off by default: an optional convenience the user opts into, not something
+	 * to spring on them.
+	 */
+	public boolean loadExportOpenWhenDone() {
+		return readBoolean(EXPORT_OPEN_WHEN_DONE_KEY, false);
+	}
+
+	public void saveExportOpenWhenDone(boolean open) {
+		write(EXPORT_OPEN_WHEN_DONE_KEY, Boolean.toString(open));
 	}
 
 	// ------------------------------------------------------------------ storage
